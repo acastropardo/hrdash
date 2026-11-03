@@ -18,6 +18,50 @@ GLYPHS = {
 
 # (top, bottom) -> glifo de bloque
 _PAIRS = {(1, 1): "██", (1, 0): "▀▀", (0, 1): "▄▄", (0, 0): "  "}
+_PAIRS1 = {(1, 1): "█", (1, 0): "▀", (0, 1): "▄", (0, 0): " "}
+
+# Corazones en pixel-art (ancho x alto), niveles 1..3
+HEARTS = {
+    1: [".##.##.",
+        "#######",
+        "#######",
+        ".#####.",
+        "..###..",
+        "...#..."],
+    2: [".##...##.",
+        "#########",
+        "#########",
+        ".#######.",
+        "..#####..",
+        "...###...",
+        "....#...."],
+    3: ["..###...###..",
+        ".#####.#####.",
+        ".###########.",
+        "#############",
+        ".###########.",
+        "..#########..",
+        "...#######...",
+        "....#####....",
+        ".....###....."],
+}
+
+
+def render_heart(level: int) -> list[str]:
+    """Corazon en 1-5 filas de terminal segun nivel (0..3). Nivel 0 = glifo ♥."""
+    if level <= 0:
+        return ["♥"]
+    grid = HEARTS[min(level, 3)]
+    w = len(grid[0])
+    g = list(grid)
+    if len(g) % 2:
+        g.append("." * w)
+    rows = []
+    for p in range(0, len(g), 2):
+        rows.append("".join(
+            _PAIRS1[(1 if a == "#" else 0, 1 if b == "#" else 0)]
+            for a, b in zip(g[p], g[p + 1])))
+    return rows
 
 
 def render_big(text: str) -> list[str]:

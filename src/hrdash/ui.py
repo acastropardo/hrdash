@@ -17,7 +17,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 from rich.text import Text
 
-from .bigfont import render_big
+from .bigfont import render_big, render_heart
 from .config import Config, save_config
 from .history import Session
 from .export import export_session
@@ -122,6 +122,7 @@ class HRDash(App):
     Screen { padding: 0 1; }
     #status { height: 1; color: #d1d5db; }
     #tiles { height: 5; }
+    #t_heart { width: 13; height: 1fr; }
     .tile { width: 1fr; height: 1fr; }
     #ch_hr { height: 1fr; min-height: 4; }
     #ch_w  { height: 5; }
@@ -141,6 +142,7 @@ class HRDash(App):
         self.export_result: dict | None = None
         self._ui_error = ""
         self._err_round = False
+        self._pulse = 0
         self._last_rescue = 0.0
         self._last_autosave = time.time()
 
@@ -148,6 +150,7 @@ class HRDash(App):
     def compose(self) -> ComposeResult:
         yield Static(id="status")
         with Horizontal(id="tiles"):
+            yield Static(id="t_heart")
             yield Static(id="t_hr", classes="tile")
             yield Static(id="t_w", classes="tile")
             yield Static(id="t_v", classes="tile")
@@ -329,8 +332,26 @@ class HRDash(App):
         t.append(f"{unit} · {sub}", style="#9ca3af")
         w.update(t)
 
+    PULSE_LEVELS = (1, 3, 2, 0)   # lub-dub: chico -> enorme -> medio -> minimo (por segundo)
+
+    def _draw_heart(self, hr: int) -> None:
+        """Corazon rojo a la izquierda del FC: palpita agrandandose/achicandose."""
+        hw = self.query_one("#t_heart", Static)
+        level = self.PULSE_LEVELS[self._pulse % 4] if hr else 0
+        self._pulse += 1
+        color = "#ff2d55" if hr else "#4b5563"
+        w = hw.size.width or 13
+        t = Text()
+        rows = render_heart(level)
+        for i, r in enumerate(rows):
+            t.append(r.center(w), style=f"bold {color}")
+            if i < len(rows) - 1:
+                t.append("\n")
+        hw.update(t)
+
     def _draw_tiles(self, hr: int, zone) -> None:
         s, cfg = self.session, self.config
+        self._draw_heart(hr)
         w_now = s.current_watts or (getattr(self.tr, "watts", None) or 0)
         spd = s.current_speed or (getattr(self.tr, "speed_kmh", None) or 0.0)
         cad = s.current_cadence or (getattr(self.tr, "cadence", None) or 0.0)
