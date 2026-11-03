@@ -64,22 +64,27 @@ def parse_cycling_power(data: bytearray):
         revs = int.from_bytes(d[pos:pos + 4], "little")
         evtime = int.from_bytes(d[pos + 4:pos + 6], "little")   # 1/1024 s
         crank = (revs, evtime)
-    elif pos + 6 <= len(d):
-        # fallback Tacx Satori: revs32 + time16 detras de la potencia
-        revs = int.from_bytes(d[pos:pos + 4], "little")
-        evtime = int.from_bytes(d[pos + 4:pos + 6], "little")
-        if revs < (1 << 24):
-            crank = (revs, evtime)
+    elif len(d) >= 14:
+        # Tacx Satori: dentro de 2A63 trae un payload estilo CSC:
+        # [wheelRevs u32][wheelTime u16][crankRevs u16][crankTime u16]
+        # -> las revoluciones de BIELA estan en los u16 de offset 10..13
+        revs = int.from_bytes(d[10:12], "little")
+        evtime = int.from_bytes(d[12:14], "little")
+        crank = (revs, evtime)
     return watts, crank, flags
 
 
-def cadence_from_crank(prev, cur) -> float | None:
-    """rpm a partir del delta de revoluciones y del tiempo de evento (1/1024 s)."""
+def cadence_from_crank(prev, cur, rev_mod: int = 1 << 32) -> float | None:
+    """rpm desde deltas de revoluciones y tiempo de evento (1/1024 s).
+
+    `rev_mod`: modulo del contador de revoluciones (2**32 estandar CP, 65536
+    para el formato tipo-CSC del Tacx Satori).
+    """
     if not prev or not cur:
         return None
-    d_rev = cur[0] - prev[0]
+    d_rev = (cur[0] - prev[0]) % rev_mod
     d_t = ((cur[1] - prev[1]) % 65536) / 1024.0
-    if d_rev <= 0 or not (0.05 < d_t < 5.0):
+    if d_rev == 0 or d_rev > 20 or not (0.05 < d_t < 10.0):
         return None
     return d_rev / d_t * 60.0
 
@@ -96,6 +101,14 @@ def parse_csc(data: bytearray):
     flags = d[0]
     pos = 1
     out = {}
+
+    # Tacx Satori: payload recortado de 11 bytes con orden count-first:
+    # [wheelRevs u32][wheelTime u16][crankRevs u16][crankTime u16]
+    if len(d) == 11 and (flags & 0x03) == 0x03:
+        return {"wheel_revs": int.from_bytes(d[1:5], "little"),
+                "wheel_time": int.from_bytes(d[5:7], "little"),
+                "crank_revs": int.from_bytes(d[7:9], "little"),
+                "crank_time": int.from_bytes(d[9:11], "little")}
 
     def _try(revs_first: bool):
         nonlocal pos
@@ -355,7 +368,9 @@ class TrainerSource(_BLESource):
     def _on_cp(self, _handle, data: bytearray) -> None:
         d = bytearray(data)
         watts, crank, flags = parse_cycling_power(d)
-        cad = cadence_from_crank(self._prev_crank, crank)
+        # formato Satori (crank no declarado, u16): modulo 16 bits
+        rev_mod = 65536 if (crank and not flags & 0x0002) else 1 << 32
+        cad = cadence_from_crank(self._prev_crank, crank, rev_mod)
         if crank:
             self._prev_crank = crank
         if watts is not None and 0 <= watts <= 3000:
@@ -392,9 +407,9 @@ class TrainerSource(_BLESource):
             cad = None
             if self._prev_csc_crank and cc is not None:
                 pv, pt = self._prev_csc_crank
-                d_r = vals["crank_revs"] - pv
+                d_r = (vals["crank_revs"] - pv) % 65536
                 d_t = ((cc - pt) % 65536) / 1024.0
-                if 0 < d_r < 10 and 0.05 < d_t < 10:
+                if 0 < d_r <= 20 and 0.05 < d_t < 10:
                     cad = d_r / d_t * 60.0
             if cc is not None:
                 self._prev_csc_crank = (vals["crank_revs"], cc)
