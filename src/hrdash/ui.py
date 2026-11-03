@@ -9,6 +9,7 @@ Layout:
 from __future__ import annotations
 
 import asyncio
+import time
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -26,6 +27,15 @@ SPD_COLOR = "#22d3ee"
 CAD_COLOR = "#a78bfa"
 W_COLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
 GLYPH8 = " ▁▂▃▄▅▆▇█"
+
+
+def _g8(level: float) -> str:
+    """Glifo de 8 niveles con indice siempre valido (0..7), tolerante a inf/nan."""
+    try:
+        v = max(0, min(7, int(round(level))))
+    except (OverflowError, ValueError, TypeError):
+        v = 7 if level == float("inf") else 0
+    return GLYPH8[v]
 
 
 def fmt_clock(seconds: int) -> str:
@@ -129,6 +139,10 @@ class HRDash(App):
         self.session = Session(config)
         self._stop = asyncio.Event()
         self.export_result: dict | None = None
+        self._ui_error = ""
+        self._err_round = False
+        self._last_rescue = 0.0
+        self._last_autosave = time.time()
 
     # ---- layout ----
     def compose(self) -> ComposeResult:
@@ -191,17 +205,61 @@ class HRDash(App):
 
     # ---- ciclo de refresco (1 Hz) ----
     def tick(self) -> None:
-        hr = getattr(self.hr, "latest_hr", None)
-        if hr is not None:
-            tr = self.tr
-            self.session.add(
-                hr,
-                watts=getattr(tr, "watts", None) if tr else None,
-                cadence=getattr(tr, "cadence", None) if tr else None,
-                speed_kmh=getattr(tr, "speed_kmh", None) if tr else None,
-                dist_m=getattr(tr, "dist_m", None) if tr else None,
-            )
+        try:
+            hr = getattr(self.hr, "latest_hr", None)
+            if hr is not None:
+                tr = self.tr
+                self.session.add(
+                    hr,
+                    watts=getattr(tr, "watts", None) if tr else None,
+                    cadence=getattr(tr, "cadence", None) if tr else None,
+                    speed_kmh=getattr(tr, "speed_kmh", None) if tr else None,
+                    dist_m=getattr(tr, "dist_m", None) if tr else None,
+                )
+        except Exception as exc:  # noqa: BLE001 - el muestreo no debe morir jamas
+            self._show_error(f"tick: {type(exc).__name__}: {exc}")
         self.refresh_all()
+        self._autosave()
+
+    # ---- robustez: secciones de dibujo aisladas + guardado de rescate ----
+    def _safe_draw(self, fn, *args) -> None:
+        try:
+            fn(*args)
+        except Exception as exc:  # noqa: BLE001
+            self._err_round = True
+            msg = f"{getattr(fn, '__name__', fn)}: {type(exc).__name__}: {exc}"
+            self._show_error(msg)
+            self._rescue_export()
+
+    def _show_error(self, msg: str) -> None:
+        self._ui_error = msg
+        try:
+            self.query_one("#hints", Static).update(
+                Text(f" ⚠ {msg[:100]}  — los datos se siguen grabando "
+                     "(RESCATE/AUTO en exportes/)", style="bold #ef4444"))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _rescue_export(self) -> None:
+        now = time.time()
+        if now - self._last_rescue < 90 or self.session.n == 0:
+            return
+        self._last_rescue = now
+        try:
+            export_session(self.session, self.config, self.hr.name, suffix="_RESCATE")
+        except Exception:  # noqa: BLE001 - no hay segundo intento de rescate
+            pass
+
+    def _autosave(self) -> None:
+        """Autoguardado cada 300 s para no depender de la salida limpia."""
+        now = time.time()
+        if now - self._last_autosave < 300 or self.session.n == 0:
+            return
+        self._last_autosave = now
+        try:
+            export_session(self.session, self.config, self.hr.name, suffix="_AUTO")
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- dibujado ----
     def _sensor_badge(self, src, label) -> list:
@@ -217,13 +275,23 @@ class HRDash(App):
 
     def refresh_all(self) -> None:
         s, cfg = self.session, self.config
+        self._err_round = False
         hr = s.current_hr if s.n else (getattr(self.hr, "latest_hr", None) or 0)
         zone = zone_for_hr(hr or 60, cfg.zones(), cfg.computed_hrmax())
-        self._draw_status(zone)
-        self._draw_tiles(hr, zone)
-        self._draw_charts(zone)
-        self._draw_stats()
-        self._draw_zones()
+        self._safe_draw(self._draw_status, zone)
+        self._safe_draw(self._draw_tiles, hr, zone)
+        self._safe_draw(self._draw_charts, zone)
+        self._safe_draw(self._draw_stats)
+        self._safe_draw(self._draw_zones)
+        if self._err_round:
+            return                       # _show_error ya pinto la alerta
+        if self._ui_error:               # ronda limpia tras un error: restaurar ayuda
+            self._ui_error = ""
+            try:
+                self.query_one("#hints", Static).update(
+                    " q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar banda+rodillo · c: edad/sexo/peso/FTP")
+            except Exception:  # noqa: BLE001
+                pass
 
     def _draw_status(self, zone) -> None:
         src = self.hr
@@ -328,13 +396,13 @@ class HRDash(App):
         # velocidad y cadencia: 1 fila de glifos de 8 niveles cada una
         vc = self.query_one("#ch_vc", Static)
         v_top = max(40.0, max(((x.speed_kmh or 0) for x in samples), default=0) + 2)
-        c_top = 140.0
+        c_top = max(140.0, max(((x.cadence or 0) for x in samples), default=0) + 15)
         line_v, line_c = Text("VEL "), Text("CAD ")
         for x in samples[-width:]:
-            lv = int(round((x.speed_kmh or 0) / v_top * 7)) if x.speed_kmh else 0
-            lc = int(round((x.cadence or 0) / c_top * 7)) if x.cadence else 0
-            line_v.append(GLYPH8[lv], style=SPD_COLOR if lv else "#374151")
-            line_c.append(GLYPH8[lc], style=CAD_COLOR if lc else "#374151")
+            lv = (x.speed_kmh or 0) / v_top * 7 if x.speed_kmh else 0
+            lc = (x.cadence or 0) / c_top * 7 if x.cadence else 0
+            line_v.append(_g8(lv), style=SPD_COLOR if lv else "#374151")
+            line_c.append(_g8(lc), style=CAD_COLOR if lc else "#374151")
         pad = width - len(samples[-width:])
         line_v.append(" " * max(0, pad))
         line_c.append(" " * max(0, pad))

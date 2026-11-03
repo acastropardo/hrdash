@@ -53,7 +53,12 @@ Datos y salidas:
 
 - Config persistente: `~/.config/hrdash/config.toml` (edad, sexo, peso, FTP, cortes de
   zona, perímetro de rueda, último sensor/rodillo).
-- Exportación: `./exportes/hrdash_<fecha>_<hora>.fit` y `.csv` (`--export-dir` para cambiar).
+- Exportación al salir con `q`: `./exportes/hrdash_<fecha>_<hora>.fit` y `.csv`
+  (`--export-dir` para cambiar).
+- **Autoguardado**: cada 5 minutos se reescribe `hrdash_<...>_AUTO.fit/.csv` (mismo
+  archivo, nunca crece), y si un gráfico lanza una excepción se vuelca
+  `hrdash_<...>_RESCATE.*` sin interrumpir el muestreo. Ambos son importables en
+  Garmin Connect igual que el final.
 
 ## Rodillos / telemetría
 

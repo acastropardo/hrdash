@@ -185,13 +185,17 @@ def validate_fit(path: Path, session: Session) -> dict:
 def export_session(session: Session, config: Config, sensor_name: str,
                    out_dir: Path | None = None,
                    with_fit: bool | None = None,
-                   with_csv: bool | None = None) -> dict:
-    """Graba la sesion. Devuelve {'fit': Path|None, 'csv': Path|None, 'validate': dict|None}."""
+                   with_csv: bool | None = None,
+                   suffix: str = "") -> dict:
+    """Graba la sesion. Devuelve {'fit': Path|None, 'csv': Path|None, 'validate': dict|None}.
+
+    `suffix`: sufijo del nombre de archivo (p.ej. "_AUTO" o "_RESCATE").
+    """
     do_fit = config.export_fit if with_fit is None else with_fit
     do_csv = config.export_csv if with_csv is None else with_csv
     out_dir = out_dir or config.effective_export_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    base = f"hrdash_{_stamp(session)}"
+    base = f"hrdash_{_stamp(session)}{suffix}"
 
     result = {'fit': None, 'csv': None, 'validate': None}
     if session.n == 0:
