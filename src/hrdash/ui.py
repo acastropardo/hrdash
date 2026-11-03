@@ -1,4 +1,10 @@
-"""Dashboard a pantalla completa (Textual): numero gigante, barras por segundo, zonas."""
+"""Dashboard a pantalla completa (Textual).
+
+Layout:
+  estado de sensores | 4 tiles gigantes (FC / WATTS / km-h / rpm)
+  | barras HR 1Hz (1fr) | barras WATTS (4) | lineas VEL/CAD (2x8 niveles)
+  | estadisticas (4) | tiempo en zona (6) | ayuda teclas (1)
+"""
 
 from __future__ import annotations
 
@@ -16,6 +22,11 @@ from .history import Session
 from .export import export_session
 from .zones import zone_for_hr
 
+SPD_COLOR = "#22d3ee"
+CAD_COLOR = "#a78bfa"
+W_COLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
+GLYPH8 = " ▁▂▃▄▅▆▇█"
+
 
 def fmt_clock(seconds: int) -> str:
     h, rem = divmod(max(0, seconds), 3600)
@@ -23,15 +34,29 @@ def fmt_clock(seconds: int) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
+def power_band(watts: int, ftp: int) -> int:
+    """0..5 segun %FTP: <56, <76, <91, <106, <121, >=121."""
+    if not ftp or not watts:
+        return 0
+    p = 100.0 * watts / ftp
+    for i, lim in enumerate((56, 76, 91, 106, 121)):
+        if p < lim:
+            return i
+    return 5
+
+
 class ConfigModal(ModalScreen):
-    """Cambiar edad / sexo / peso sin reiniciar la sesion."""
+    """Cambiar edad / sexo / peso / FTP sin reiniciar la sesion."""
 
     CSS = """
-    #cfgbox { width: 46; height: auto; padding: 1 2; background: $panel; border: round $brand; }
+    #cfgbox { width: 50; height: auto; padding: 1 2; background: $panel; border: round $brand; }
     Label { color: $text-muted; }
     Input { margin: 0 0 1 0; }
     #err { color: #ef4444; height: 1; }
     """
+
+    FIELDS = (("in_age", "Edad"), ("in_sex", "Sexo (M/F)"),
+              ("in_weight", "Peso (kg)"), ("in_ftp", "FTP (W)"))
 
     def __init__(self, cfg: Config):
         super().__init__()
@@ -39,21 +64,19 @@ class ConfigModal(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="cfgbox"):
-            yield Label("Edad")
-            yield Input(placeholder="47", id="in_age")
-            yield Label("Sexo (M/F)")
-            yield Input(placeholder="M", id="in_sex")
-            yield Label("Peso (kg)")
-            yield Input(placeholder="70", id="in_weight")
+            for _id, lab in self.FIELDS:
+                yield Label(lab)
+                yield Input(id=_id)
             yield Static("", id="err")
             with Horizontal():
                 yield Button("Guardar", id="ok", variant="success")
                 yield Button("Cancelar", id="no", variant="default")
 
     def on_mount(self) -> None:
-        self.query_one("#in_age", Input).value = str(self.cfg.age)
-        self.query_one("#in_sex", Input).value = self.cfg.sex
-        self.query_one("#in_weight", Input).value = str(self.cfg.weight)
+        vals = {"in_age": str(self.cfg.age), "in_sex": self.cfg.sex,
+                "in_weight": str(self.cfg.weight), "in_ftp": str(self.cfg.ftp)}
+        for k, v in vals.items():
+            self.query_one(f"#{k}", Input).value = v
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "no":
@@ -64,11 +87,14 @@ class ConfigModal(ModalScreen):
             age = int(self.query_one("#in_age", Input).value)
             sex = self.query_one("#in_sex", Input).value.strip().upper()[:1]
             weight = float(self.query_one("#in_weight", Input).value)
-            assert 5 <= age <= 120 and sex in ("M", "F") and 20 <= weight <= 400
+            ftp = int(self.query_one("#in_ftp", Input).value)
+            assert 5 <= age <= 120 and sex in ("M", "F") and 20 <= weight <= 400 \
+                and 50 <= ftp <= 600
         except Exception:  # noqa: BLE001
-            err.update("Valores invalidos (edad 5-120, M/F, peso 20-400)")
+            err.update("Valores invalidos (edad 5-120, M/F, peso 20-400, FTP 50-600)")
             return
-        self.cfg.age, self.cfg.sex, self.cfg.weight = age, sex, weight
+        self.cfg.age, self.cfg.sex = age, sex
+        self.cfg.weight, self.cfg.ftp = weight, ftp
         self.dismiss(self.cfg)
 
 
@@ -78,26 +104,27 @@ class HRDash(App):
     BINDINGS = [
         ("q", "quit_session", "Salir y grabar"),
         ("r", "reset_session", "Reiniciar"),
-        ("s", "reconnect", "Reconectar sensor"),
+        ("s", "reconnect", "Reconectar"),
         ("c", "open_config", "Config"),
     ]
 
     CSS = """
     Screen { padding: 0 1; }
     #status { height: 1; color: #d1d5db; }
-    #midrow { height: 5; }
-    #bignum { width: 1fr; height: 1fr; }
-    #sideinfo { width: 38; height: 1fr; padding-left: 2; }
-    #chart { height: 1fr; }
-    #chart_title { height: 1; color: #6b7280; }
-    #stats { height: 2; }
+    #tiles { height: 5; }
+    .tile { width: 1fr; height: 1fr; }
+    #ch_hr { height: 1fr; min-height: 4; }
+    #ch_w  { height: 5; }
+    #ch_vc { height: 2; }
+    #stats { height: 4; }
     #zones { height: 6; }
     #hints { height: 1; color: #6b7280; }
     """
 
-    def __init__(self, sensor, config: Config):
+    def __init__(self, hr_source, trainer_source, config: Config):
         super().__init__()
-        self.sensor = sensor
+        self.hr = hr_source
+        self.tr = trainer_source
         self.config = config
         self.session = Session(config)
         self._stop = asyncio.Event()
@@ -106,35 +133,42 @@ class HRDash(App):
     # ---- layout ----
     def compose(self) -> ComposeResult:
         yield Static(id="status")
-        with Horizontal(id="midrow"):
-            yield Static(id="bignum")
-            yield Static(id="sideinfo")
-        yield Static(id="chart_title")
-        yield Static(id="chart")
+        with Horizontal(id="tiles"):
+            yield Static(id="t_hr", classes="tile")
+            yield Static(id="t_w", classes="tile")
+            yield Static(id="t_v", classes="tile")
+            yield Static(id="t_c", classes="tile")
+        yield Static(id="ch_hr")
+        yield Static(id="ch_w")
+        yield Static(id="ch_vc")
         yield Static(id="stats")
         yield Static(id="zones")
         yield Static(id="hints")
 
     def on_mount(self) -> None:
-        self.run_worker(self._run_sensor(), group="sensor", exit_on_error=False)
+        self.run_worker(self._run(self.hr, "banda"), group="hr", exit_on_error=False)
+        if self.tr is not None:
+            self.run_worker(self._run(self.tr, "rodillo"), group="trainer",
+                            exit_on_error=False)
         self.set_interval(1.0, self.tick)
         self.query_one("#hints", Static).update(
-            " q: salir y grabar FIT+CSV · r: reiniciar sesion · s: reconectar sensor · c: edad/sexo/peso")
+            " q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar banda+rodillo · c: edad/sexo/peso/FTP")
         self.refresh_all()
 
-    async def _run_sensor(self) -> None:
+    async def _run(self, source, label: str) -> None:
         try:
-            await self.sensor.run(self._stop)
+            await source.run(self._stop)
         except Exception as exc:  # noqa: BLE001
-            self.sensor.error = f"sensor caido: {exc}"
+            source.error = f"{label}: {exc}"
 
     # ---- acciones ----
     def action_reset_session(self) -> None:
         self.session.reset()
 
     def action_reconnect(self) -> None:
-        if hasattr(self.sensor, "request_reconnect"):
-            self.sensor.request_reconnect()
+        for src in (self.hr, self.tr):
+            if src is not None and hasattr(src, "request_reconnect"):
+                src.request_reconnect()
 
     def action_open_config(self) -> None:
         self.push_screen(ConfigModal(self.config), self._config_updated)
@@ -146,7 +180,10 @@ class HRDash(App):
 
     def action_quit_session(self) -> None:
         try:
-            self.export_result = export_session(self.session, self.config, self.sensor.name)
+            name = getattr(self.hr, "name", "HRDash")
+            if getattr(self.tr, "name", None):
+                name += f" + {self.tr.name}"
+            self.export_result = export_session(self.session, self.config, name)
         except Exception as exc:  # noqa: BLE001
             self.export_result = {"fit_error": str(exc)}
         self._stop.set()
@@ -154,132 +191,190 @@ class HRDash(App):
 
     # ---- ciclo de refresco (1 Hz) ----
     def tick(self) -> None:
-        hr = getattr(self.sensor, "latest_hr", None)
+        hr = getattr(self.hr, "latest_hr", None)
         if hr is not None:
-            self.session.add(hr)
+            tr = self.tr
+            self.session.add(
+                hr,
+                watts=getattr(tr, "watts", None) if tr else None,
+                cadence=getattr(tr, "cadence", None) if tr else None,
+                speed_kmh=getattr(tr, "speed_kmh", None) if tr else None,
+                dist_m=getattr(tr, "dist_m", None) if tr else None,
+            )
         self.refresh_all()
 
+    # ---- dibujado ----
+    def _sensor_badge(self, src, label) -> list:
+        if src is None:
+            return [Text(f" · {label} off", style="#6b7280")]
+        ok = getattr(src, "connected", False)
+        col = "#22c55e" if ok else "#ef4444"
+        err = getattr(src, "error", "")
+        txt = src.name if ok else (err or "sin senal")
+        return [Text(" · ", style="#6b7280"),
+                Text("●" if ok else "○", style=f"bold {col}"),
+                Text(f" {label} {txt}", style=col if not ok else "#d1d5db")]
+
     def refresh_all(self) -> None:
-        s = self.session
-        cfg = self.config
-        hr = s.current_hr if s.n else (getattr(self.sensor, "latest_hr", None) or 0)
+        s, cfg = self.session, self.config
+        hr = s.current_hr if s.n else (getattr(self.hr, "latest_hr", None) or 0)
         zone = zone_for_hr(hr or 60, cfg.zones(), cfg.computed_hrmax())
         self._draw_status(zone)
-        self._draw_bignum(hr, zone)
-        self._draw_sideinfo(hr, zone)
-        self._draw_chart()
+        self._draw_tiles(hr, zone)
+        self._draw_charts(zone)
         self._draw_stats()
         self._draw_zones()
 
     def _draw_status(self, zone) -> None:
-        sensor = self.sensor
-        ok = getattr(sensor, "connected", False)
-        dot, dot_color = ("●", zone.color) if ok else ("○", "#ef4444")
-        name = getattr(sensor, "name", "sensor")
-        bat = getattr(sensor, "battery", None)
-        contact = getattr(sensor, "contact", None)
-        err = getattr(sensor, "error", "")
-        parts = [
-            Text(f"{dot} ", style=f"bold {dot_color}"),
-            Text(f"{name}", style="bold white"),
-            Text("  " + ("conectado" if ok else f"DESCONECTADO{' - ' + err if err else ''}"),
-                 style="#22c55e" if ok else "bold #ef4444"),
-        ]
+        src = self.hr
+        ok = getattr(src, "connected", False)
+        parts = [Text("● " if ok else "○ ", style=f"bold {zone.color if ok else '#ef4444'}"),
+                 Text(f"{src.name}", style="bold white"),
+                 Text("  " + ("conectada" if ok else "BANDA DESCONECTADA"),
+                      style="#22c55e" if ok else "bold #ef4444")]
+        bat = getattr(src, "battery", None)
         if bat is not None:
             parts.append(Text(f" · pila {bat}%", style="#9ca3af"))
+        contact = getattr(src, "contact", None)
         if contact is not None:
             parts.append(Text(f" · contacto {'si' if contact else 'NO'}",
                               style="#9ca3af" if contact else "#f97316"))
+        parts += self._sensor_badge(self.tr, "rodillo")
         parts.append(Text(f" · ⏱ {fmt_clock(self.session.elapsed_s)}", style="#9ca3af"))
         parts.append(Text(f" · Z{zone.idx} {zone.name}", style=f"bold {zone.color}"))
         self.query_one("#status", Static).update(Text.assemble(*parts))
 
-    def _draw_bignum(self, hr: int, zone) -> None:
-        label = str(hr) if hr else "--"
-        rows = render_big(label)
-        t = Text(justify="left")
-        for i, r in enumerate(rows):
-            t.append(r, style=f"bold {zone.color}")
-            if i < len(rows) - 1:
-                t.append("\n")
-        self.query_one("#bignum", Static).update(t)
-
-    def _draw_sideinfo(self, hr: int, zone) -> None:
-        cfg = self.config
-        hrmax = cfg.computed_hrmax()
-        heart = "♥" if (hr and self.session.n % 2 == 0) else "♡"
-        pct = self.session.pct_max if self.session.n else 0.0
-        kpm_now = 0.0
-        if hr:
-            from .calories import keytel_kcal_per_min
-            kpm_now = keytel_kcal_per_min(hr, cfg.age, cfg.weight, cfg.sex)
-        low = max(0, int(round(zone.low_pct / 100 * hrmax)))
-        high = "∞" if zone.high_pct > 200 else str(int(round(zone.high_pct / 100 * hrmax)))
-        t = Text()
-        t.append(f"{heart} BPM ", style=f"bold {zone.color}")
-        t.append(f"zona {zone.key} · {low}-{high if high!='∞' else 'max'}\n", style="#d1d5db")
-        t.append(f"%FCmáx  {pct:5.1f} %  (máx est {hrmax})\n", style="#9ca3af")
-        t.append(f"kcal/min ahora {kpm_now:4.1f}\n", style="#9ca3af")
-        t.append(f"muestras {self.session.n}", style="#6b7280")
-        self.query_one("#sideinfo", Static).update(t)
-
-    def _draw_chart(self) -> None:
-        cfg = self.config
-        chart = self.query_one("#chart", Static)
-        width = max(20, chart.size.width or 80)
-        rows = max(3, chart.size.height or 10)
-        samples = self.session.window(width)
-        self.query_one("#chart_title", Static).update(
-            f"Barras de FC · 1 muestra/seg · ventana {width}s · suelo 40 · techo "
-            f"{max(cfg.computed_hrmax(), (max((s.hr for s in samples), default=0)) + 5)} bpm")
-
-        if not samples:
-            chart.update(Text("esperando datos del sensor...", style="#6b7280"))
+    def _tile(self, widget_id: str, value: str, unit: str, sub: str, color: str) -> None:
+        w = self.query_one(f"#{widget_id}", Static)
+        compact = (w.size.width or 40) < 34
+        if compact:
+            t = Text(justify="center")
+            t.append(f"{value:>5} {unit}\n", style=f"b {color}")
+            t.append(f" {sub}", style="#9ca3af")
+            w.update(t)
             return
+        rows = render_big(value)
+        t = Text()
+        for i, r in enumerate(rows):
+            t.append(r.center((w.size.width or 34) - 2), style=f"b {color}")
+            t.append("\n")
+        t.append(f"{unit} · {sub}", style="#9ca3af")
+        w.update(t)
 
-        top = max(cfg.computed_hrmax(), max(s.hr for s in samples) + 5)
-        floor = 40
-        span = max(1.0, top - floor)
+    def _draw_tiles(self, hr: int, zone) -> None:
+        s, cfg = self.session, self.config
+        w_now = s.current_watts or (getattr(self.tr, "watts", None) or 0)
+        spd = s.current_speed or (getattr(self.tr, "speed_kmh", None) or 0.0)
+        cad = s.current_cadence or (getattr(self.tr, "cadence", None) or 0.0)
+        pct_ftp = 100.0 * w_now / cfg.ftp if cfg.ftp else 0.0
+        self._tile("t_hr", str(hr) if hr else "--", "FC bpm",
+                   f"Z{zone.idx} {zone.name}", zone.color)
+        self._tile("t_w", str(w_now) if w_now else "--", "WATTS",
+                   f"{pct_ftp:.0f}%FTP {s.wkg:.1f}W/kg",
+                   W_COLORS[power_band(w_now, cfg.ftp)])
+        self._tile("t_v", str(int(spd)) if spd else "--", "km/h",
+                   f"dec {spd - int(spd):.1f} media {s.avg_speed:.1f}" if spd else "sin rodillo",
+                   SPD_COLOR)
+        self._tile("t_c", str(int(cad)) if cad else "--", "rpm",
+                   f"media {s.avg_cadence:.0f}" if cad else "sin rodillo",
+                   CAD_COLOR)
 
-        def bar_h(hr: int) -> int:
-            h = int(round((hr - floor) / span * rows))
-            return max(1, min(rows, h)) if hr >= floor else 0
-
-        zones = cfg.zones()
-        cols = [bar_h(s.hr) for s in samples]
-        zcolors = [zones[min(s.zone_idx, 5)].color for s in samples]
-
+    def _bars(self, samples, rows, width, value_fn, color_fn, floor, top,
+              blank=" ", prefix=""):
+        """Texto con `rows` lineas de barras verticales (1 char/muestra)."""
+        cols = []
+        for s in samples:
+            v = value_fn(s)
+            if v is None or v <= 0:
+                cols.append(0)
+            else:
+                h = int(round((v - floor) / max(1e-6, top - floor) * rows))
+                cols.append(max(1, min(rows, h)))
+        colors = [color_fn(s) for s in samples]
         t = Text()
         for r in range(rows, 0, -1):
-            for i, h in enumerate(cols):
-                ch = "█" if h >= r else ("▏" if r == 1 else " ")
-                if ch != " ":
-                    t.append(ch * 1, style=zcolors[i])
+            if prefix and r == rows:
+                t.append(prefix, style="#6b7280")
+            for i in range(width):
+                if i < len(cols):
+                    if cols[i] >= r:
+                        t.append("█", style=colors[i])
+                    else:
+                        t.append("▏" if r == 1 else blank)
                 else:
-                    t.append(" ")
-            if r > 1:
-                t.append("\n")
-        chart.update(t)
+                    t.append(blank)
+            t.append("\n")
+        return t
+
+    def _draw_charts(self, zone) -> None:
+        cfg = self.config
+        s = self.session
+        ch_hr = self.query_one("#ch_hr", Static)
+        ch_w = self.query_one("#ch_w", Static)
+        width = max(20, (ch_hr.size.width or 80) - 9)
+        samples = s.window(width)
+
+        hr_top = max(cfg.computed_hrmax(), max((x.hr for x in samples), default=0) + 5)
+        zones = cfg.zones()
+        ch_hr.update(self._bars(samples, max(3, ch_hr.size.height or 6), width,
+                                lambda x: x.hr, lambda x: zones[min(x.zone_idx, 5)].color,
+                                40, hr_top, prefix=f"HR 40-{hr_top}  "))
+
+        w_top = max(int(cfg.ftp * 1.25), max(((x.watts or 0) for x in samples), default=0) + 30, 100)
+        ch_w.update(self._bars(samples, 4, width, lambda x: x.watts or 0,
+                               lambda x: W_COLORS[power_band(x.watts or 0, cfg.ftp)],
+                               0, w_top, prefix=f"W 0-{w_top}    "))
+
+        # velocidad y cadencia: 1 fila de glifos de 8 niveles cada una
+        vc = self.query_one("#ch_vc", Static)
+        v_top = max(40.0, max(((x.speed_kmh or 0) for x in samples), default=0) + 2)
+        c_top = 140.0
+        line_v, line_c = Text("VEL "), Text("CAD ")
+        for x in samples[-width:]:
+            lv = int(round((x.speed_kmh or 0) / v_top * 7)) if x.speed_kmh else 0
+            lc = int(round((x.cadence or 0) / c_top * 7)) if x.cadence else 0
+            line_v.append(GLYPH8[lv], style=SPD_COLOR if lv else "#374151")
+            line_c.append(GLYPH8[lc], style=CAD_COLOR if lc else "#374151")
+        pad = width - len(samples[-width:])
+        line_v.append(" " * max(0, pad))
+        line_c.append(" " * max(0, pad))
+        vc.update(Text.assemble(line_v, "\n", line_c, "\n"))
 
     def _draw_stats(self) -> None:
-        s = self.session
+        s, cfg = self.session, self.config
+        n = s.n
         t = Text()
-        def cell(label: str, value: str, style: str = "bold white") -> None:
-            t.append(f" {label} ", style="#6b7280")
-            t.append(f"{value} ", style=style)
-            t.append("│", style="#374151")
-        avg = f"{s.avg_hr:.0f}" if s.n else "--"
-        cell("FC MAX", f"{s.max_hr or '--'}", "bold #ef4444")
-        cell("FC MEDIA", avg, "bold #facc15")
-        cell("FC MIN", f"{s.min_hr or '--'}", "bold #2f7bff")
-        cell("TIEMPO", fmt_clock(s.elapsed_s))
-        cell("KCAL TOTAL", f"{s.total_kcal:.1f}", "bold #22c55e")
-        t.append("\n")
-        kpm = s.total_kcal / max(1, s.elapsed_s) * 60 if s.n else 0.0
-        cell("KCAL/MIN", f"{kpm:.1f}")
-        cell("MUESTRAS", str(s.n))
-        cell("FCmáx est", str(self.config.computed_hrmax()))
-        cell("EDAD/PESO", f"{self.config.age}a/{self.config.weight:.0f}kg {self.config.sex}")
+
+        def row(pairs) -> None:
+            for label, value, style in pairs:
+                t.append(f" {label} ", style="#6b7280")
+                t.append(f"{value} ", style=style)
+                t.append("│", style="#374151")
+            t.append("\n")
+
+        row([("FC MAX", f"{s.max_hr or '--'}", "b #ef4444"),
+             ("FC MED", f"{s.avg_hr:.0f}" if n else "--", "b #facc15"),
+             ("FC MIN", f"{s.min_hr or '--'}", "b #2f7bff"),
+             ("%FCmáx", f"{s.pct_max:.0f}%" if n else "--", "white"),
+             ("FCmáx est", str(cfg.computed_hrmax()), "#9ca3af"),
+             ("EDAD/PESO", f"{cfg.age}a/{cfg.weight:.0f}kg {cfg.sex}", "#9ca3af")])
+        row([("W MAX", f"{s.max_watts or '--'}", "b #f97316"),
+             ("W MED", f"{s.avg_watts:.0f}" if s.avg_watts else "--", "b #facc15"),
+             ("W:KG", f"{s.wkg:.2f}" if s.current_watts else "--", "#9ca3af"),
+             ("FTP", f"{cfg.ftp}W", "b #22c55e"),
+             ("DIST", f"{s.dist_km:.2f} km", "b " + SPD_COLOR),
+             ("VEL MED", f"{s.avg_speed:.1f}", SPD_COLOR),
+             ("VEL MÁX", f"{s.max_speed:.1f}", SPD_COLOR)])
+        row([("CAD MED", f"{s.avg_cadence:.0f}" if s.avg_cadence else "--", CAD_COLOR),
+             ("CAD MÁX", f"{s.max_cadence:.0f}" if s.max_cadence else "--", CAD_COLOR),
+             ("MUESTRAS", str(n), "#9ca3af"),
+             ("TIEMPO", fmt_clock(s.elapsed_s), "white"),
+             ("KCAL", f"{s.total_kcal:.0f}", "b #22c55e"),
+             ("KCAL/MIN", f"{s.total_kcal / max(1, s.elapsed_s) * 60:.1f}" if n else "0.0", "#9ca3af")])
+        if self.tr is not None and not getattr(self.tr, "connected", False):
+            t.append(" sin telemetria del rodillo: "
+                     f"{getattr(self.tr, 'error', '') or 'esperando señales (pedalee?)'}",
+                     style="italic #f97316")
         self.query_one("#stats", Static).update(t)
 
     def _draw_zones(self) -> None:

@@ -20,10 +20,14 @@ def _stamp(session: Session) -> str:
 
 
 def export_csv(session: Session, config: Config, path: Path) -> Path:
-    lines = ["epoch,iso,heart_rate,zone_idx,zone,kcal_per_min"]
+    lines = ["epoch,iso,heart_rate,zone_idx,zone,kcal_per_min,watts,cadence_rpm,speed_kmh,distance_m"]
     for s in session.samples:
         zkey = f"Z{s.zone_idx}"
-        lines.append(f"{s.epoch},{s.iso},{s.hr},{s.zone_idx},{zkey},{s.kcal_per_min:.4f}")
+        lines.append(f"{s.epoch},{s.iso},{s.hr},{s.zone_idx},{zkey},{s.kcal_per_min:.4f},"
+                     f"{'' if s.watts is None else s.watts},"
+                     f"{'' if s.cadence is None else s.cadence},"
+                     f"{'' if s.speed_kmh is None else s.speed_kmh},"
+                     f"{'' if s.dist_m is None else s.dist_m}")
     path.write_text("\n".join(lines) + "\n")
     return path
 
@@ -51,16 +55,27 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
     })
 
     last_ts = -1
+    tr_data = (session._t["watts"][3] > 0 or session._t["speed_kmh"][3] > 0)
     for s in session.samples:
         if s.epoch <= last_ts:             # FIT exige timestamps estrictamente crecientes
             continue
         last_ts = s.epoch
-        enc.write_mesg({
+        mesg = {
             'mesg_num': MESG_RECORD,
             'timestamp': datetime.fromtimestamp(s.epoch, tz=timezone.utc),
             'heart_rate': int(s.hr),
             'zone': int(s.zone_idx),
-        })
+        }
+        if tr_data:
+            if s.watts:
+                mesg['power'] = int(s.watts)
+            if s.cadence:
+                mesg['cadence'] = int(round(s.cadence))
+            if s.speed_kmh:
+                mesg['speed'] = s.speed_kmh / 3.6          # m/s (el encoder aplica scale)
+            if s.dist_m is not None:
+                mesg['distance'] = float(s.dist_m)         # metros
+        enc.write_mesg(mesg)
 
     time_in_zone = [float(x) for x in session.zone_seconds]
 
@@ -83,6 +98,7 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
         'max_heart_rate': int(session.max_hr),
         'min_heart_rate': int(session.min_hr),
         'time_in_hr_zone': time_in_zone,
+        **_trainer_fields(session, tr_data),
     })
 
     enc.write_mesg({
@@ -100,6 +116,7 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
         'max_heart_rate': int(session.max_hr),
         'min_heart_rate': int(session.min_hr),
         'time_in_hr_zone': time_in_zone,
+        **_trainer_fields(session, tr_data),
     })
 
     enc.write_mesg({
@@ -117,6 +134,24 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
     return path
 
 
+def _trainer_fields(session: Session, tr_data: bool) -> dict:
+    """Campos de potencia/velocidad/cadencia/distancia para lap y session."""
+    if not tr_data:
+        return {}
+    f = {}
+    if session._t["watts"][3] > 0:
+        f['avg_power'] = int(round(session.avg_watts))
+        f['max_power'] = int(session.max_watts)
+    if session._t["speed_kmh"][3] > 0:
+        f['avg_speed'] = round(session.avg_speed / 3.6, 3)   # m/s
+        f['max_speed'] = round(session.max_speed / 3.6, 3)
+        f['total_distance'] = float(session.total_dist_m)    # metros
+    if session._t["cadence"][3] > 0:
+        f['avg_cadence'] = int(round(session.avg_cadence))
+        f['max_cadence'] = int(round(session.max_cadence))
+    return f
+
+
 def validate_fit(path: Path, session: Session) -> dict:
     """Decodifica el FIT recien escrito y comprueba consistencia (round-trip)."""
     from garmin_fit_sdk import Stream, Decoder
@@ -126,6 +161,7 @@ def validate_fit(path: Path, session: Session) -> dict:
                                              convert_types_to_strings=False)
     recs = messages.get('record_mesgs', [])
     hrs = [r.get('heart_rate') for r in recs if isinstance(r.get('heart_rate'), (int, float))]
+    pows = [r.get('power') for r in recs if isinstance(r.get('power'), (int, float))]
     summary = {
         'records': len(recs),
         'samples': session.n,
@@ -133,11 +169,15 @@ def validate_fit(path: Path, session: Session) -> dict:
         'app_avg_hr': round(session.avg_hr, 1),
         'fit_max_hr': max(hrs) if hrs else None,
         'app_max_hr': session.max_hr,
+        'fit_max_watts': max(pows) if pows else None,
+        'app_max_watts': session.max_watts or None,
         'errors': len(errors),
         'bytes': path.stat().st_size,
     }
     ok = (summary['records'] == summary['samples']
-          and summary['fit_max_hr'] == summary['app_max_hr'])
+          and summary['fit_max_hr'] == summary['app_max_hr']
+          and (summary['fit_max_watts'] is None
+               or summary['fit_max_watts'] == summary['app_max_watts']))
     summary['ok'] = ok
     return summary
 

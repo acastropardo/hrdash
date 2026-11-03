@@ -23,12 +23,15 @@ class Config:
     age: int = 47
     sex: str = "M"            # M | F
     weight: float = 70.0
+    ftp: int = 240             # umbral de potencia funcional (para colorear watts)
     hrmax: int | None = None   # None -> Tanaka por edad
     zone_pcts: list = field(default_factory=lambda: [list(p) for p in DEFAULT_ZONE_PCTS])
     export_dir: str | None = None   # None -> ./exportes
     export_fit: bool = True
     export_csv: bool = True
-    last_device: str | None = None  # nombre o direccion del ultimo sensor
+    wheel_mm: int = 2135         # perimetro de rueda para velocidad via CSC (28" = 2135)
+    last_device: str | None = None  # nombre o direccion de la ultima banda
+    last_trainer: str | None = None  # nombre o direccion del ultimo rodillo
 
     def computed_hrmax(self) -> int:
         return self.hrmax if self.hrmax else default_hrmax(self.age)
@@ -49,8 +52,8 @@ def load_config() -> Config:
             data = tomllib.loads(CONFIG_PATH.read_text())
         except Exception:
             return cfg
-        for k in ("age", "sex", "weight", "hrmax", "export_dir",
-                  "export_fit", "export_csv", "last_device"):
+        for k in ("age", "sex", "weight", "ftp", "hrmax", "export_dir", "wheel_mm",
+                  "export_fit", "export_csv", "last_device", "last_trainer"):
             if k in data:
                 setattr(cfg, k, data[k])
         if "zone_pcts" in data and len(data["zone_pcts"]) == 5:
@@ -65,6 +68,7 @@ def save_config(cfg: Config) -> None:
         f"age = {cfg.age}",
         f'sex = "{cfg.sex}"',
         f"weight = {cfg.weight}",
+        f"ftp = {cfg.ftp}",
     ]
     if cfg.hrmax:
         lines.append(f"hrmax = {cfg.hrmax}")
@@ -76,8 +80,11 @@ def save_config(cfg: Config) -> None:
         lines.append(f'export_dir = "{cfg.export_dir}"')
     lines.append(f"export_fit = {str(cfg.export_fit).lower()}")
     lines.append(f"export_csv = {str(cfg.export_csv).lower()}")
+    lines.append(f"wheel_mm = {cfg.wheel_mm}")
     if cfg.last_device:
         lines.append(f'last_device = "{cfg.last_device}"')
+    if cfg.last_trainer:
+        lines.append(f'last_trainer = "{cfg.last_trainer}"')
     CONFIG_PATH.write_text("\n".join(lines) + "\n")
 
 
