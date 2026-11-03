@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Entorno virtual
+.venv/
+
+# Datos personales de sesiones (FIT/CSV) y config local
+exportes/
+*.fit
+*.csv
+
+# macOS
+.DS_Store
