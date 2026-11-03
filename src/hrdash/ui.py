@@ -116,6 +116,8 @@ class HRDash(App):
         ("r", "reset_session", "Reiniciar"),
         ("s", "reconnect", "Reconectar"),
         ("c", "open_config", "Config"),
+        ("h", "view_hr", "Vista FC"),
+        ("w", "view_w", "Vista watts"),
     ]
 
     CSS = """
@@ -143,6 +145,7 @@ class HRDash(App):
         self._ui_error = ""
         self._err_round = False
         self._pulse = 0
+        self.view = "hr"          # "hr" | "watts": metrica del grafico principal
         self._last_rescue = 0.0
         self._last_autosave = time.time()
 
@@ -169,7 +172,7 @@ class HRDash(App):
                             exit_on_error=False)
         self.set_interval(1.0, self.tick)
         self.query_one("#hints", Static).update(
-            " q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar banda+rodillo · c: edad/sexo/peso/FTP")
+            " q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · h: vista FC · w: vista watts")
         self.refresh_all()
 
     async def _run(self, source, label: str) -> None:
@@ -186,6 +189,14 @@ class HRDash(App):
         for src in (self.hr, self.tr):
             if src is not None and hasattr(src, "request_reconnect"):
                 src.request_reconnect()
+
+    def action_view_hr(self) -> None:
+        self.view = "hr"
+        self.refresh_all()
+
+    def action_view_w(self) -> None:
+        self.view = "watts"
+        self.refresh_all()
 
     def action_open_config(self) -> None:
         self.push_screen(ConfigModal(self.config), self._config_updated)
@@ -292,7 +303,7 @@ class HRDash(App):
             self._ui_error = ""
             try:
                 self.query_one("#hints", Static).update(
-                    " q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar banda+rodillo · c: edad/sexo/peso/FTP")
+                    " q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · h: vista FC · w: vista watts")
             except Exception:  # noqa: BLE001
                 pass
 
@@ -395,24 +406,36 @@ class HRDash(App):
             t.append("\n")
         return t
 
-    def _draw_charts(self, zone) -> None:
+    def _hr_chart(self, samples, rows, width):
         cfg = self.config
-        s = self.session
-        ch_hr = self.query_one("#ch_hr", Static)
-        ch_w = self.query_one("#ch_w", Static)
-        width = max(20, (ch_hr.size.width or 80) - 9)
-        samples = s.window(width)
-
         hr_top = max(cfg.computed_hrmax(), max((x.hr for x in samples), default=0) + 5)
         zones = cfg.zones()
-        ch_hr.update(self._bars(samples, max(3, ch_hr.size.height or 6), width,
-                                lambda x: x.hr, lambda x: zones[min(x.zone_idx, 5)].color,
-                                40, hr_top, prefix=f"HR 40-{hr_top}  "))
+        return self._bars(samples, rows, width,
+                          lambda x: x.hr, lambda x: zones[min(x.zone_idx, 5)].color,
+                          40, hr_top, prefix=f"HR 40-{hr_top}  ")
 
-        w_top = max(int(cfg.ftp * 1.25), max(((x.watts or 0) for x in samples), default=0) + 30, 100)
-        ch_w.update(self._bars(samples, 4, width, lambda x: x.watts or 0,
-                               lambda x: W_COLORS[power_band(x.watts or 0, cfg.ftp)],
-                               0, w_top, prefix=f"W 0-{w_top}    "))
+    def _w_chart(self, samples, rows, width):
+        cfg = self.config
+        w_top = max(int(cfg.ftp * 1.25),
+                    max(((x.watts or 0) for x in samples), default=0) + 30, 100)
+        return self._bars(samples, rows, width, lambda x: x.watts or 0,
+                          lambda x: W_COLORS[power_band(x.watts or 0, cfg.ftp)],
+                          0, w_top, prefix=f"W 0-{w_top}    ")
+
+    def _draw_charts(self, zone) -> None:
+        s = self.session
+        ch_main = self.query_one("#ch_hr", Static)   # area grande: vista activa
+        ch_strip = self.query_one("#ch_w", Static)   # tira chica: la otra metrica
+        width = max(20, (ch_main.size.width or 80) - 9)
+        samples = s.window(width)
+        main_rows = max(3, ch_main.size.height or 6)
+
+        if self.view == "watts":
+            ch_main.update(self._w_chart(samples, main_rows, width))
+            ch_strip.update(self._hr_chart(samples, 4, width))
+        else:
+            ch_main.update(self._hr_chart(samples, main_rows, width))
+            ch_strip.update(self._w_chart(samples, 4, width))
 
         # velocidad y cadencia: 1 fila de glifos de 8 niveles cada una
         vc = self.query_one("#ch_vc", Static)

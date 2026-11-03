@@ -48,6 +48,8 @@ Teclas dentro del dashboard:
 | `r` | reiniciar la sesión (mismos datos) |
 | `s` | reconectar banda y rodillo |
 | `c` | cambiar edad / sexo / peso / **FTP** en caliente |
+| `h` | vista principal del gráfico: **FC** (default) |
+| `w` | vista principal del gráfico: **WATTS** (la tira chica muestra siempre la métrica opuesta) |
 
 Datos y salidas:
 
