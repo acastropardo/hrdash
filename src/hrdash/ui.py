@@ -9,6 +9,7 @@ Layout:
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 
 from textual.app import App, ComposeResult
@@ -136,6 +137,9 @@ class HRDash(App):
         self._err_round = False
         self._pulse = 0
         self.view = "hr"          # "hr" | "watts": metrica del grafico principal
+        self._beat_t0 = time.time()
+        self._beat_period = 1.0
+        self._heart_lvl = -1      # ultimo nivel dibujado (evita redibujos)
         self._last_rescue = 0.0
         self._last_autosave = time.time()
 
@@ -163,6 +167,7 @@ class HRDash(App):
             self.run_worker(self._run(self.tr, "rodillo"), group="trainer",
                             exit_on_error=False)
         self.set_interval(1.0, self.tick)
+        self.set_interval(0.1, self._tick_heart)   # corazon a 10 fps, independiente del dato
         self.query_one("#hints", Static).update(
             " q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · h: vista FC · w: vista watts")
         self.refresh_all()
@@ -336,14 +341,39 @@ class HRDash(App):
         t.append(f"{unit} · {sub}", style="#9ca3af")
         w.update(t)
 
-    PULSE_LEVELS = (1, 3, 2, 0)   # lub-dub: chico -> enorme -> medio -> minimo (por segundo)
+    PULSE_LEVELS = (1, 3, 2, 0)   # (legado) ciclo historico de 1 Hz
 
-    def _draw_heart(self, hr: int) -> None:
-        """Corazon rojo a la izquierda del FC: palpita agrandandose/achicandose."""
+    def _tick_heart(self) -> None:
+        """Animacion del corazon: su propio timer a 10 fps, no al 1 Hz del dato.
+
+        Frecuencia del latido = FC actual (lub-dub con periodo 60/FC), amplitud
+        con decaimiento exponencial: suba violenta, bajada suave.
+        """
+        try:
+            hr = self.session.current_hr or (getattr(self.hr, "latest_hr", None) or 0)
+            if not hr:
+                lvl, color = 0, "#4b5563"        # en reposo: gris pequeno
+            else:
+                now = time.time()
+                self._beat_period = max(0.34, min(1.4, 60.0 / hr))
+                if now - self._beat_t0 >= self._beat_period:
+                    self._beat_t0 = now
+                t = now - self._beat_t0
+                lub = math.exp(-t * 8.0 / self._beat_period)
+                d0 = 0.30 * self._beat_period
+                dub = 0.55 * math.exp(-max(0.0, t - d0) * 8.0 / self._beat_period) \
+                    if t >= d0 else 0.0
+                amp = min(1.0, max(lub, dub))
+                lvl = int(round(amp * 3))
+                color = "#ff5e8a" if amp > 0.55 else "#ff2d55"
+            if lvl != self._heart_lvl:
+                self._heart_lvl = lvl
+                self._render_heart(lvl, color)
+        except Exception as exc:  # noqa: BLE001 - la animacion jamas debe tumbar la app
+            self._show_error(f"heart: {type(exc).__name__}: {exc}")
+
+    def _render_heart(self, level: int, color: str) -> None:
         hw = self.query_one("#t_heart", Static)
-        level = self.PULSE_LEVELS[self._pulse % 4] if hr else 0
-        self._pulse += 1
-        color = "#ff2d55" if hr else "#4b5563"
         w = hw.size.width or 13
         t = Text()
         rows = render_heart(level)
@@ -355,7 +385,6 @@ class HRDash(App):
 
     def _draw_tiles(self, hr: int, zone) -> None:
         s, cfg = self.session, self.config
-        self._draw_heart(hr)
         w_now = s.current_watts or (getattr(self.tr, "watts", None) or 0)
         spd = s.current_speed or (getattr(self.tr, "speed_kmh", None) or 0.0)
         cad = s.current_cadence or (getattr(self.tr, "cadence", None) or 0.0)
