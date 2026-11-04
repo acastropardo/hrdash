@@ -4,6 +4,9 @@ Layout:
   estado de sensores | 4 tiles gigantes (FC / WATTS / km-h / rpm)
   | barras HR 1Hz (1fr) | barras WATTS (4) | lineas VEL/CAD (2x8 niveles)
   | estadisticas (4) | tiempo en zona (6) | ayuda teclas (1)
+
+Vistas: h = barras de FC arriba, w = barras de watts, g = tablero de gauges
+(diales braille con agujas animadas que reemplaza tiles/graficos/zonas).
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from rich.text import Text
 
 from .bigfont import render_big, render_heart
 from .config import Config, save_config
+from .gauges import Gauge
 from .history import Session
 from .export import export_session
 from .zones import zone_for_hr, power_band, W_COLORS, POWER_BANDS
@@ -27,6 +31,12 @@ from .zones import zone_for_hr, power_band, W_COLORS, POWER_BANDS
 SPD_COLOR = "#22d3ee"
 CAD_COLOR = "#a78bfa"
 GLYPH8 = " ▁▂▃▅▆▇█"
+HINTS = (" q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · "
+         "h: FC · w: watts · g: tablero")
+
+
+def _round_up(v: float, m: int) -> float:
+    return math.ceil(v / m) * m
 
 
 def _g8(level: float) -> str:
@@ -107,6 +117,7 @@ class HRDash(App):
         ("c", "open_config", "Config"),
         ("h", "view_hr", "Vista FC"),
         ("w", "view_w", "Vista watts"),
+        ("g", "view_gauge", "Tablero"),
     ]
 
     CSS = """
@@ -123,6 +134,22 @@ class HRDash(App):
     #zonesrow > Static { width: 1fr; }
     #zones { margin-right: 2; }
     #hints { height: 1; color: #6b7280; }
+
+    /* vista tablero: cluster de gauges ocupa el lugar de todo lo demas */
+    #cluster { height: 1fr; display: none; }
+    #crow1 { height: 3fr; }
+    #crow2 { height: 2fr; }
+    .gauge { width: 1fr; height: 1fr; }
+    #g_hr { width: 2fr; }
+    #g_w { width: 1fr; }
+    #g_panel { width: 2fr; padding: 0 1; }
+    Screen.tach #cluster { display: block; }
+    Screen.tach #tiles,
+    Screen.tach #ch_hr,
+    Screen.tach #ch_w,
+    Screen.tach #ch_vc,
+    Screen.tach #stats,
+    Screen.tach #zonesrow { display: none; }
     """
 
     def __init__(self, hr_source, trainer_source, config: Config):
@@ -136,12 +163,15 @@ class HRDash(App):
         self._ui_error = ""
         self._err_round = False
         self._pulse = 0
-        self.view = "hr"          # "hr" | "watts": metrica del grafico principal
+        self.view = "hr"          # "hr" | "watts" | "gauge": vista principal
         self._beat_t0 = time.time()
         self._beat_period = 1.0
         self._heart_lvl = -1      # ultimo nivel dibujado (evita redibujos)
         self._last_rescue = 0.0
         self._last_autosave = time.time()
+        self._gauges = {"g_hr": Gauge(), "g_w": Gauge(),
+                        "g_v": Gauge(), "g_c": Gauge()}
+        self._needle = {"hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0}
 
     # ---- layout ----
     def compose(self) -> ComposeResult:
@@ -159,6 +189,14 @@ class HRDash(App):
         with Horizontal(id="zonesrow"):
             yield Static(id="zones")
             yield Static(id="zones_w")
+        with Vertical(id="cluster"):
+            with Horizontal(id="crow1"):
+                yield Static(id="g_hr", classes="gauge")
+                yield Static(id="g_w", classes="gauge")
+            with Horizontal(id="crow2"):
+                yield Static(id="g_v", classes="gauge")
+                yield Static(id="g_c", classes="gauge")
+                yield Static(id="g_panel")
         yield Static(id="hints")
 
     def on_mount(self) -> None:
@@ -168,8 +206,8 @@ class HRDash(App):
                             exit_on_error=False)
         self.set_interval(1.0, self.tick)
         self.set_interval(0.1, self._tick_heart)   # corazon a 10 fps, independiente del dato
-        self.query_one("#hints", Static).update(
-            " q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · h: vista FC · w: vista watts")
+        self.set_interval(0.1, self._tick_gauges)  # agujas a 10 fps (solo en vista tablero)
+        self.query_one("#hints", Static).update(HINTS)
         self.refresh_all()
 
     async def _run(self, source, label: str) -> None:
@@ -188,11 +226,21 @@ class HRDash(App):
                 src.request_reconnect()
 
     def action_view_hr(self) -> None:
-        self.view = "hr"
-        self.refresh_all()
+        self._set_view("hr")
 
     def action_view_w(self) -> None:
-        self.view = "watts"
+        self._set_view("watts")
+
+    def action_view_gauge(self) -> None:
+        self._set_view("gauge")
+
+    def _set_view(self, v: str) -> None:
+        self.view = v
+        if v == "gauge":
+            self.screen.add_class("tach")
+        else:
+            self.screen.remove_class("tach")
+        self._tick_gauges()      # primera pincelada inmediata (o vuelve el grafico)
         self.refresh_all()
 
     def action_open_config(self) -> None:
@@ -290,18 +338,20 @@ class HRDash(App):
         hr = s.current_hr if s.n else (getattr(self.hr, "latest_hr", None) or 0)
         zone = zone_for_hr(hr or 60, cfg.zones(), cfg.computed_hrmax())
         self._safe_draw(self._draw_status, zone)
-        self._safe_draw(self._draw_tiles, hr, zone)
-        self._safe_draw(self._draw_charts, zone)
-        self._safe_draw(self._draw_stats)
-        self._safe_draw(self._draw_zones)
-        self._safe_draw(self._draw_zones_w)
+        if self.view == "gauge":
+            self._safe_draw(self._draw_cluster)
+        else:
+            self._safe_draw(self._draw_tiles, hr, zone)
+            self._safe_draw(self._draw_charts, zone)
+            self._safe_draw(self._draw_stats)
+            self._safe_draw(self._draw_zones)
+            self._safe_draw(self._draw_zones_w)
         if self._err_round:
             return                       # _show_error ya pinto la alerta
         if self._ui_error:               # ronda limpia tras un error: restaurar ayuda
             self._ui_error = ""
             try:
-                self.query_one("#hints", Static).update(
-                    " q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · h: vista FC · w: vista watts")
+                self.query_one("#hints", Static).update(HINTS)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -351,6 +401,8 @@ class HRDash(App):
         """
         try:
             hr = self.session.current_hr or (getattr(self.hr, "latest_hr", None) or 0)
+            if self.view == "gauge":
+                return                     # el corazon esta oculto: no gastar tramas
             if not hr:
                 lvl, color = 0, "#4b5563"        # en reposo: gris pequeno
             else:
@@ -551,3 +603,125 @@ class HRDash(App):
             t.append("░" * (barw - fill), style="#374151")
             t.append(f"│ {fmt_clock(secs):>7} {kj:6.0f} kJ\n", style="#9ca3af")
         self.query_one("#zones_w", Static).update(t)
+
+    # ---- vista tablero: cluster de gauges con agujas animadas ----
+    def _needle_targets(self) -> dict:
+        s, tr = self.session, self.tr
+        hr = s.current_hr or (getattr(self.hr, "latest_hr", None) or 0)
+        w = s.current_watts or (getattr(tr, "watts", None) if tr else 0) or 0
+        v = s.current_speed or (getattr(tr, "speed_kmh", None) if tr else 0) or 0
+        c = s.current_cadence or (getattr(tr, "cadence", None) if tr else 0) or 0
+        return {"hr": float(hr), "w": float(w), "v": float(v), "c": float(c)}
+
+    def _tick_gauges(self) -> None:
+        """Inercia de agujas a 10 fps: suben rapido (~0.5 s), bajan suave (~1 s)."""
+        if self.view != "gauge":
+            return
+        try:
+            for key, target in self._needle_targets().items():
+                d = self._needle[key]
+                d += (target - d) * (0.5 if target > d else 0.14)
+                if abs(target - d) < 0.05:
+                    d = target
+                self._needle[key] = max(0.0, d)
+            self._safe_draw(self._draw_cluster)
+        except Exception as exc:  # noqa: BLE001 - la animacion jamas debe tumbar la app
+            self._show_error(f"gauges: {type(exc).__name__}: {exc}")
+
+    def _hr_scale(self):
+        cfg = self.config
+        lo, hrmax = 40.0, max(1, cfg.computed_hrmax())
+        hi = _round_up(max(hrmax + 10, self.session.max_hr + 10), 10)
+        segs = []
+        for z in cfg.zones():
+            f0 = max(0.0, min(1.0, (z.low_pct / 100 * hrmax - lo) / (hi - lo)))
+            f1 = max(0.0, min(1.0, (min(z.high_pct, 100.0) / 100 * hrmax - lo) / (hi - lo)))
+            if f1 > f0:
+                segs.append((f0, f1, z.color))
+        return lo, hi, segs
+
+    def _w_scale(self):
+        cfg, s = self.config, self.session
+        hi = _round_up(max(cfg.ftp * 1.25, s.max_watts + 25, 100), 25)
+        segs = []
+        for (name, p0, p1), col in zip(POWER_BANDS, W_COLORS):
+            f0 = max(0.0, min(1.0, p0 / 100 * cfg.ftp / hi))
+            f1 = max(0.0, min(1.0, p1 / 100 * cfg.ftp / hi))
+            if f1 > f0:
+                segs.append((f0, f1, col))
+        return 0.0, float(hi), segs
+
+    def _render_gauge(self, wid: str, value, lo, hi, segs, major, minor,
+                      label, sub, color, big=False, avg=None) -> None:
+        st = self.query_one(f"#{wid}", Static)
+        g = self._gauges[wid]
+        st.update(g.render(st.size.width or 40, st.size.height or 16, value,
+                           lo, hi, segs, major, minor, label, sub, color,
+                           big=big, avg=avg))
+
+    def _draw_cluster(self) -> None:
+        s, cfg = self.session, self.config
+        nd = self._needle
+        zone = zone_for_hr(int(nd["hr"]) or 60, cfg.zones(), cfg.computed_hrmax())
+
+        lo, hi, segs = self._hr_scale()
+        self._render_gauge("g_hr", nd["hr"], lo, hi, segs, 20, 10,
+                           str(int(round(nd["hr"]))) if nd["hr"] else "--",
+                           f"bpm · Z{zone.idx} {zone.name}", zone.color,
+                           big=True, avg=s.avg_hr or None)
+
+        lo, hi, segs = self._w_scale()
+        pct = 100.0 * nd["w"] / cfg.ftp if cfg.ftp else 0.0
+        major = 50 if hi >= 200 else 25
+        self._render_gauge("g_w", nd["w"], lo, hi, segs, major, major // 2,
+                           f"{int(round(nd['w']))} W" if nd["w"] else "-- W",
+                           f"{pct:.0f}%FTP · {s.wkg:.1f}W/kg",
+                           W_COLORS[power_band(int(nd["w"]), cfg.ftp)],
+                           avg=s.avg_watts or None)
+
+        lo, hi = 0.0, _round_up(max(40.0, s.max_speed + 5), 10)
+        self._render_gauge("g_v", nd["v"], lo, hi, [(0.0, 1.0, SPD_COLOR)],
+                           10, 5, f"{nd['v']:.1f} km/h" if nd["v"] else "-- km/h",
+                           f"media {s.avg_speed:.1f}", SPD_COLOR,
+                           avg=s.avg_speed or None)
+
+        hi = 160.0 if s.max_cadence > 130 else 140.0
+        self._render_gauge("g_c", nd["c"], 0.0, hi, [(0.0, 1.0, CAD_COLOR)],
+                           20, 10, f"{int(round(nd['c']))} rpm" if nd["c"] else "-- rpm",
+                           f"media {s.avg_cadence:.0f}", CAD_COLOR,
+                           avg=s.avg_cadence or None)
+
+        self._draw_panel()
+
+    def _draw_panel(self) -> None:
+        """Panel digital del tablero: resumen de sesion en formato panel de a bordo."""
+        s, cfg = self.session, self.config
+        t = Text()
+
+        def row(pairs) -> None:
+            for label, value, style in pairs:
+                t.append(f" {label} ", style="#6b7280")
+                t.append(f"{value} ", style=style)
+                t.append("│", style="#374151")
+            t.append("\n")
+
+        zone = zone_for_hr(int(self._needle["hr"]) or 60, cfg.zones(), cfg.computed_hrmax())
+        row([("⏱", fmt_clock(s.elapsed_s), "b white"),
+             ("KCAL", f"{s.total_kcal:.0f}", "b #22c55e"),
+             ("DIST", f"{s.dist_km:.2f} km", SPD_COLOR)])
+        row([("FC MED", f"{s.avg_hr:.0f}" if s.n else "--", "b #facc15"),
+             ("FC MAX", f"{s.max_hr or '--'}", "b #ef4444"),
+             ("%FCmáx", f"{s.pct_max:.0f}%·{cfg.computed_hrmax()}" if s.n else "--", "#9ca3af")])
+        row([("W MED", f"{s.avg_watts:.0f}" if s.avg_watts else "--", "b #facc15"),
+             ("W MAX", f"{s.max_watts or '--'}", "b #f97316"),
+             ("FTP", f"{cfg.ftp}W", "b #22c55e")])
+        row([("ZONA", f"Z{zone.idx} {zone.name}", f"b {zone.color}"),
+             ("EN ZONA", fmt_clock(s.zone_seconds[zone.idx]), zone.color),
+             ("MUESTRAS", str(s.n), "#9ca3af")])
+        if self.tr is not None and not getattr(self.tr, "connected", False):
+            t.append(" sin telemetria del rodillo\n", style="italic #f97316")
+        if s.n and s.total_kcal:
+            t.append(f" ritmo {s.total_kcal / max(1, s.elapsed_s) * 60:.1f} kcal/min"
+                     f" · FCmáx est {cfg.computed_hrmax()} · {cfg.age}a/{cfg.weight:.0f}kg {cfg.sex}",
+                     style="#6b7280")
+        self.query_one("#g_panel", Static).update(t)

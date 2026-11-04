@@ -10,6 +10,8 @@ Polar H9/H10, Garmin HRM, Coospo…) y opcionalmente un rodillo (Tacx u otro) v�
 - **barras de FC 1 muestra/segundo** a todo el ancho, con el color de cada zona
 - **barras de watts** por banda de %FTP y líneas de **velocidad y cadencia** (8 niveles)
 - FC **max / media / min**, W max/media, **W/kg**, vel/cad, **distancia**
+- **vista tablero** (`g`): gauges estilo cuentavueltas dibujados con braille — arco de
+  zonas FC/%FTP, aguja con inercia a 10 fps, marcas de media y números gigantes
 - **gasto calórico** en vivo (fórmula Keytel) según edad, sexo y peso
 - **tiempo y kcal por zona** (Z1–Z5)
 - al salir graba la sesión en **FIT compatible con Garmin Connect** (records con FC,
@@ -50,6 +52,7 @@ Teclas dentro del dashboard:
 | `c` | cambiar edad / sexo / peso / **FTP** en caliente |
 | `h` | vista principal del gráfico: **FC** (default) |
 | `w` | vista principal del gráfico: **WATTS** (la tira chica muestra siempre la métrica opuesta) |
+| `g` | **vista tablero**: gauges tipo tacómetro (FC grande + watts, vel, cad y panel digital) |
 
 Datos y salidas:
 
