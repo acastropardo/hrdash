@@ -21,12 +21,11 @@ from .bigfont import render_big, render_heart
 from .config import Config, save_config
 from .history import Session
 from .export import export_session
-from .zones import zone_for_hr
+from .zones import zone_for_hr, power_band, W_COLORS, POWER_BANDS
 
 SPD_COLOR = "#22d3ee"
 CAD_COLOR = "#a78bfa"
-W_COLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
-GLYPH8 = " ▁▂▃▄▅▆▇█"
+GLYPH8 = " ▁▂▃▅▆▇█"
 
 
 def _g8(level: float) -> str:
@@ -42,17 +41,6 @@ def fmt_clock(seconds: int) -> str:
     h, rem = divmod(max(0, seconds), 3600)
     m, s = divmod(rem, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
-
-
-def power_band(watts: int, ftp: int) -> int:
-    """0..5 segun %FTP: <56, <76, <91, <106, <121, >=121."""
-    if not ftp or not watts:
-        return 0
-    p = 100.0 * watts / ftp
-    for i, lim in enumerate((56, 76, 91, 106, 121)):
-        if p < lim:
-            return i
-    return 5
 
 
 class ConfigModal(ModalScreen):
@@ -130,7 +118,9 @@ class HRDash(App):
     #ch_w  { height: 5; }
     #ch_vc { height: 2; }
     #stats { height: 4; }
-    #zones { height: 6; }
+    #zonesrow { height: 7; }
+    #zonesrow > Static { width: 1fr; }
+    #zones { margin-right: 2; }
     #hints { height: 1; color: #6b7280; }
     """
 
@@ -162,7 +152,9 @@ class HRDash(App):
         yield Static(id="ch_w")
         yield Static(id="ch_vc")
         yield Static(id="stats")
-        yield Static(id="zones")
+        with Horizontal(id="zonesrow"):
+            yield Static(id="zones")
+            yield Static(id="zones_w")
         yield Static(id="hints")
 
     def on_mount(self) -> None:
@@ -297,6 +289,7 @@ class HRDash(App):
         self._safe_draw(self._draw_charts, zone)
         self._safe_draw(self._draw_stats)
         self._safe_draw(self._draw_zones)
+        self._safe_draw(self._draw_zones_w)
         if self._err_round:
             return                       # _show_error ya pinto la alerta
         if self._ui_error:               # ronda limpia tras un error: restaurar ayuda
@@ -492,8 +485,10 @@ class HRDash(App):
     def _draw_zones(self) -> None:
         s = self.session
         zones = self.config.zones()
-        barw = 28
+        w = self.query_one("#zones", Static).size.width or 70
+        barw = max(8, min(28, w - 40))
         t = Text()
+        t.append(f" ZONAS FC (%FCmax {self.config.computed_hrmax()})\n", style="bold #9ca3af")
         total = max(1, sum(s.zone_seconds))
         for z in zones:
             secs = s.zone_seconds[z.idx]
@@ -505,3 +500,25 @@ class HRDash(App):
             t.append("░" * (barw - fill), style="#374151")
             t.append(f"│ {fmt_clock(secs):>8}  {kcal:5.1f} kcal\n", style="#9ca3af")
         self.query_one("#zones", Static).update(t)
+
+    def _draw_zones_w(self) -> None:
+        """Panel derecho: zonas de potencia por %FTP (mismas bandas del grafico W)."""
+        s = self.session
+        cfg = self.config
+        w = self.query_one("#zones_w", Static).size.width or 70
+        barw = max(6, min(26, w - 42))
+        t = Text()
+        t.append(f" ZONAS POTENCIA (FTP {cfg.ftp} W)\n", style="bold #9ca3af")
+        total = max(1, sum(s.pzone_seconds))
+        for i, (name, lo, hi) in enumerate(POWER_BANDS):
+            secs = s.pzone_seconds[i]
+            kj = s.pzone_kj[i]
+            col = W_COLORS[i]
+            fill = int(round(barw * secs / total)) if secs else 0
+            rng = f"{lo:.0f}-{hi:.0f}%" if hi < 900 else f"> {lo:.0f}%"
+            t.append(f" {name:<9}", style=f"bold {col}")
+            t.append(f" {rng:>9} ", style="#6b7280")
+            t.append("│" + "█" * fill, style=col)
+            t.append("░" * (barw - fill), style="#374151")
+            t.append(f"│ {fmt_clock(secs):>7} {kj:6.0f} kJ\n", style="#9ca3af")
+        self.query_one("#zones_w", Static).update(t)

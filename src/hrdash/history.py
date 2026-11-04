@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 
 from .calories import keytel_kcal_per_min
-from .zones import zone_for_hr
+from .zones import zone_for_hr, power_band
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,8 @@ class Session:
         self._sum_hr = 0
         self.zone_seconds: list[int] = [0] * 6
         self.zone_kcal: list[float] = [0.0] * 6
+        self.pzone_seconds: list[int] = [0] * 6   # banda de potencia 0..5 (%FTP)
+        self.pzone_kj: list[float] = [0.0] * 6
         # telemetria del rodillo: (suma, max, min, n) para promedios sobre muestras validas
         self._t = {"watts": [0.0, 0, 0, 0],
                    "cadence": [0.0, 0.0, 0.0, 0],
@@ -61,6 +63,10 @@ class Session:
         self.total_kcal += kpm / 60.0
         self.zone_seconds[zone.idx] += 1
         self.zone_kcal[zone.idx] += kpm / 60.0
+        if watts and watts > 0:
+            pb = power_band(watts, cfg.ftp)
+            self.pzone_seconds[pb] += 1
+            self.pzone_kj[pb] += watts / 1000.0     # kJ de trabajo
         for key, val in (("watts", watts), ("cadence", cadence), ("speed_kmh", speed_kmh)):
             if val is not None and val > 0:
                 acc = self._t[key]

@@ -53,3 +53,27 @@ def zone_for_hr(hr: int, zones: list[Zone], hrmax: int) -> Zone:
         if z.low_pct <= pct < z.high_pct:
             return z
     return zones[-1]
+
+
+# ---- zonas de potencia (bandas por %FTP, mismos colores que el grafico de W) ----
+W_COLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
+# (nombre, %FTP bajo, %FTP alto) por banda 0..5
+POWER_BANDS = [
+    ("P0 Sub-56",  0.0,   56.0),
+    ("P1 Rec",    56.0,   76.0),
+    ("P2 Aer",    76.0,   91.0),
+    ("P3 Tempo",  91.0,  106.0),
+    ("P4 Umbral", 106.0, 121.0),
+    ("P5 Max",   121.0, 999.0),
+]
+
+
+def power_band(watts: int, ftp: int) -> int:
+    """Banda 0..5 segun %FTP: <56, <76, <91, <106, <121, >=121."""
+    if not ftp or not watts:
+        return 0
+    p = 100.0 * watts / ftp
+    for i, (_n, lo, hi) in enumerate(POWER_BANDS):
+        if lo <= p < hi:
+            return i
+    return 5
