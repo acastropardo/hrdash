@@ -13,6 +13,7 @@ from .ble import (SensorSource, SimSensor, TrainerSource, probe,
 from .config import Config, load_config, prompt_interactive, save_config
 from .export import export_session
 from .history import Session
+from .laps import LapTracker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,6 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hrmax", type=int, help="FCmax fija (default: Tanaka por edad)")
     p.add_argument("--wheel-mm", type=int,
                    help="perimetro de rueda en mm para velocidad via CSC (default 2135)")
+    p.add_argument("--lap", type=float, metavar="KM",
+                   help="largo de vuelta de la vista pista (tecla p), en km (default 5)")
     p.add_argument("--sensor", metavar="NOMBRE_O_ADDR",
                    help="banda de FC: nombre o direccion (default: autoscaneo)")
     p.add_argument("--trainer", metavar="NOMBRE_O_ADDR",
@@ -63,6 +66,8 @@ def apply_flags(cfg: Config, args) -> Config:
         cfg.hrmax = args.hrmax
     if args.wheel_mm is not None:
         cfg.wheel_mm = args.wheel_mm
+    if args.lap is not None:
+        cfg.lap_m = int(max(100, args.lap * 1000))
     if args.export_dir is not None:
         cfg.export_dir = args.export_dir
     if args.no_fit:
@@ -97,6 +102,7 @@ async def cmd_scan(seconds: int) -> int:
 
 async def cmd_headless(hr_source, tr_source, cfg: Config, duration: int) -> int:
     sess = Session(cfg)
+    laps = LapTracker(cfg.lap_m, cfg)
     stop = asyncio.Event()
     tasks = [asyncio.create_task(hr_source.run(stop))]
     if tr_source is not None:
@@ -115,12 +121,16 @@ async def cmd_headless(hr_source, tr_source, cfg: Config, duration: int) -> int:
             spd = getattr(tr_source, "speed_kmh", None) if tr_source else None
             dist = getattr(tr_source, "dist_m", None) if tr_source else None
             s = sess.add(hr, watts=w, cadence=cad, speed_kmh=spd, dist_m=dist)
+            closed = laps.add(s)
             print(f"[{i+1:3d}s] FC={hr:3d} Z{s.zone_idx} · {w or '-':>4} W · "
                   f"{spd if spd is not None else '-':>5} km/h · "
                   f"{cad if cad is not None else '-':>5} rpm · "
                   f"{(dist or 0)/1000:5.2f} km · media={sess.avg_hr:5.1f} · "
                   f"kcal={sess.total_kcal:5.2f} · "
                   f"{'OK' if hr_source.connected else 'reconectando FC'}")
+            if closed:
+                print(f"        ⚑ vuelta {len(laps.laps)} en {closed.elapsed_s}s · "
+                      f"media {closed.avg_hr:.0f} bpm · {closed.avg_watts:.0f} W")
     finally:
         stop.set()
         for t in tasks:
@@ -132,6 +142,10 @@ async def cmd_headless(hr_source, tr_source, cfg: Config, duration: int) -> int:
                 pass
     res = export_session(sess, cfg, hr_source.name)
     print_summary(sess, res)
+    if sess.n:
+        print(f"  vueltas de {cfg.lap_m} m: {len(laps.laps)} cerradas · "
+              f"en curso {laps.pos_m} m"
+              + (" (distancia estimada por velocidad)" if laps.estimada else ""))
     return 0 if sess.n else 2
 
 

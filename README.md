@@ -53,6 +53,22 @@ Teclas dentro del dashboard:
 | `h` | vista principal del gráfico: **FC** (default) |
 | `w` | vista principal del gráfico: **WATTS** (la tira chica muestra siempre la métrica opuesta) |
 | `g` | **vista tablero**: gauges tipo tacómetro (FC grande + watts, vel, cad y panel digital) |
+| `p` | **vista pista**: circuito tipo velódromo con la bici en la vuelta en curso |
+| `[` / `]` | en la vista pista: recorre los largos de vuelta (1, 2, 3, **5**, 10, 20 km) |
+
+### Vista pista (`p`)
+
+Circuito dibujado en celdas braille: dos rectas y dos semicírculos, con la línea de
+meta y marcas de cuarto de vuelta. La posición de la bici es **virtual** — se calcula
+con la distancia acumulada de la sesión (`distancia % largo de vuelta`), así que sobre
+el rodillo la bici avanza como si rodara en un circuito de ese largo.
+
+- Vueltas de **5 km** por defecto (`lap_m` en la config, `--lap 5`, o `[` / `]` en caliente).
+- Tablero de vueltas: vuelta en curso, tiempo, FC media/max, watts medios, kJ, kcal y
+  tiempo de cada vuelta cerrada.
+- Si el rodillo no manda distancia (FTMS/CSC), la distancia se **estima** integrando la
+  velocidad, y el tablero lo indica.
+- Las vueltas son solo visualización: el FIT sigue grabando un único lap, como antes.
 
 Datos y salidas:
 

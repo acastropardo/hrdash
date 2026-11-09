@@ -6,7 +6,9 @@ Layout:
   | estadisticas (4) | tiempo en zona (6) | ayuda teclas (1)
 
 Vistas: h = barras de FC arriba, w = barras de watts, g = tablero de gauges
-(diales braille con agujas animadas que reemplaza tiles/graficos/zonas).
+(diales braille con agujas animadas que reemplaza tiles/graficos/zonas),
+p = pista de carreras: ovalo en braille con la bici en la vuelta de `lap_m` y
+tablero de vueltas. El marcador se mueve a 10 fps con su propio timer.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from .bigfont import render_big, render_heart
 from .config import Config, save_config
 from .gauges import Gauge
 from .history import Session
+from .laps import LapTracker
+from .track import Track
 from .export import export_session
 from .zones import zone_for_hr, power_band, W_COLORS, POWER_BANDS
 
@@ -32,7 +36,9 @@ SPD_COLOR = "#22d3ee"
 CAD_COLOR = "#a78bfa"
 GLYPH8 = " ▁▂▃▅▆▇█"
 HINTS = (" q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · "
-         "h: FC · w: watts · g: tablero")
+         "h: FC · w: watts · g: tablero · p: pista · [ ]: largo de vuelta")
+# presets del largo de vuelta para la vista pista (se recorren con [ y ])
+LAP_PRESETS = [1000, 2000, 3000, 5000, 10000, 20000]
 
 
 def _round_up(v: float, m: int) -> float:
@@ -118,6 +124,9 @@ class HRDash(App):
         ("h", "view_hr", "Vista FC"),
         ("w", "view_w", "Vista watts"),
         ("g", "view_gauge", "Tablero"),
+        ("p", "view_pista", "Vista pista"),
+        ("[", "cycle_lap(-1)", "Vuelta mas corta"),
+        ("]", "cycle_lap(1)", "Vuelta mas larga"),
     ]
 
     CSS = """
@@ -134,6 +143,17 @@ class HRDash(App):
     #zonesrow > Static { width: 1fr; }
     #zones { margin-right: 2; }
     #hints { height: 1; color: #6b7280; }
+
+    /* vista pista: el ovalo ocupa el lugar de tiles/graficos/zonas */
+    #pista { height: 1fr; min-height: 6; display: none; }
+    #lapboard { height: 7; display: none; }
+    Screen.pista #pista, Screen.pista #lapboard { display: block; }
+    Screen.pista #tiles,
+    Screen.pista #ch_hr,
+    Screen.pista #ch_w,
+    Screen.pista #ch_vc,
+    Screen.pista #stats,
+    Screen.pista #zonesrow { display: none; }
 
     /* vista tablero: cluster de gauges ocupa el lugar de todo lo demas */
     #cluster { height: 1fr; display: none; }
@@ -172,6 +192,11 @@ class HRDash(App):
         self._gauges = {"g_hr": Gauge(), "g_w": Gauge(),
                         "g_v": Gauge(), "g_c": Gauge()}
         self._needle = {"hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0}
+        self.laps = LapTracker(config.lap_m, config)
+        self._track = Track()
+        self._marker = 0.0         # posicion suavizada de la bici (0..1 de la vuelta)
+        self._trail: list[float] = []
+        self._lap_flash = 0.0      # instante de la ultima vuelta cerrada
 
     # ---- layout ----
     def compose(self) -> ComposeResult:
@@ -189,6 +214,8 @@ class HRDash(App):
         with Horizontal(id="zonesrow"):
             yield Static(id="zones")
             yield Static(id="zones_w")
+        yield Static(id="pista")
+        yield Static(id="lapboard")
         with Vertical(id="cluster"):
             with Horizontal(id="crow1"):
                 yield Static(id="g_hr", classes="gauge")
@@ -207,6 +234,7 @@ class HRDash(App):
         self.set_interval(1.0, self.tick)
         self.set_interval(0.1, self._tick_heart)   # corazon a 10 fps, independiente del dato
         self.set_interval(0.1, self._tick_gauges)  # agujas a 10 fps (solo en vista tablero)
+        self.set_interval(0.1, self._tick_pista)   # marcador de la bici a 10 fps
         self.query_one("#hints", Static).update(HINTS)
         self.refresh_all()
 
@@ -219,6 +247,10 @@ class HRDash(App):
     # ---- acciones ----
     def action_reset_session(self) -> None:
         self.session.reset()
+        self.laps.reset()
+        self._trail.clear()
+        self._marker = 0.0
+        self._lap_flash = 0.0
 
     def action_reconnect(self) -> None:
         for src in (self.hr, self.tr):
@@ -234,13 +266,43 @@ class HRDash(App):
     def action_view_gauge(self) -> None:
         self._set_view("gauge")
 
+    def action_view_pista(self) -> None:
+        self._set_view("pista")
+
+    def action_cycle_lap(self, delta: int) -> None:
+        """Recorre los presets de largo de vuelta (1, 2, 3, 5, 10, 20 km)."""
+        try:
+            i = LAP_PRESETS.index(self.config.lap_m)
+        except ValueError:
+            LAP_PRESETS.append(int(self.config.lap_m))
+            i = LAP_PRESETS.index(int(self.config.lap_m))
+        self._set_lap_m(LAP_PRESETS[(i + delta) % len(LAP_PRESETS)])
+
+    def _set_lap_m(self, lap_m: int) -> None:
+        lap_m = int(max(100, lap_m))
+        if lap_m == self.config.lap_m:
+            return
+        self.config.lap_m = lap_m
+        self.laps.lap_m = lap_m
+        self.laps.recompute(self.session.samples)   # rehace las vueltas con el nuevo largo
+        self._trail.clear()
+        self._marker = self.laps.frac
+        try:
+            save_config(self.config)
+        except Exception:  # noqa: BLE001
+            pass
+        self.refresh_all()
+
     def _set_view(self, v: str) -> None:
         self.view = v
+        for cls in ("tach", "pista"):
+            self.screen.remove_class(cls)
         if v == "gauge":
             self.screen.add_class("tach")
-        else:
-            self.screen.remove_class("tach")
+        elif v == "pista":
+            self.screen.add_class("pista")
         self._tick_gauges()      # primera pincelada inmediata (o vuelve el grafico)
+        self._tick_pista()
         self.refresh_all()
 
     def action_open_config(self) -> None:
@@ -268,13 +330,15 @@ class HRDash(App):
             hr = getattr(self.hr, "latest_hr", None)
             if hr is not None:
                 tr = self.tr
-                self.session.add(
+                s = self.session.add(
                     hr,
                     watts=getattr(tr, "watts", None) if tr else None,
                     cadence=getattr(tr, "cadence", None) if tr else None,
                     speed_kmh=getattr(tr, "speed_kmh", None) if tr else None,
                     dist_m=getattr(tr, "dist_m", None) if tr else None,
                 )
+                if self.laps.add(s):
+                    self._lap_flash = time.time()
         except Exception as exc:  # noqa: BLE001 - el muestreo no debe morir jamas
             self._show_error(f"tick: {type(exc).__name__}: {exc}")
         self.refresh_all()
@@ -340,6 +404,9 @@ class HRDash(App):
         self._safe_draw(self._draw_status, zone)
         if self.view == "gauge":
             self._safe_draw(self._draw_cluster)
+        elif self.view == "pista":
+            self._safe_draw(self._draw_pista, hr, zone)
+            self._safe_draw(self._draw_laps, hr, zone)
         else:
             self._safe_draw(self._draw_tiles, hr, zone)
             self._safe_draw(self._draw_charts, zone)
@@ -725,3 +792,98 @@ class HRDash(App):
                      f" · FCmáx est {cfg.computed_hrmax()} · {cfg.age}a/{cfg.weight:.0f}kg {cfg.sex}",
                      style="#6b7280")
         self.query_one("#g_panel", Static).update(t)
+
+    # ---- vista pista: ovalo + tablero de vueltas ----
+    def _zone_at(self, idx: int):
+        zones = self.config.zones()
+        return zones[min(max(idx, 0), 5)]
+
+    def _tick_pista(self) -> None:
+        """Marcador de la bici a 10 fps: interpola entre las muestras de 1 Hz."""
+        if self.view != "pista":
+            return
+        try:
+            lap_m = max(1, self.laps.lap_m)
+            target = self.laps.frac
+            spd = self.session.current_speed or (getattr(self.tr, "speed_kmh", None) or 0.0)
+            if spd:
+                target = min(0.9999, target + (spd / 3.6) * 0.1 / lap_m)
+            d = self._marker
+            if abs(target - d) > 0.5:        # salto de vuelta: no rebobinar la estela
+                d = target
+            else:
+                d += (target - d) * 0.45
+            self._marker = max(0.0, min(0.9999, d))
+            self._trail.append(self._marker)
+            del self._trail[:-14]
+            self._safe_draw(self._draw_pista)
+        except Exception as exc:  # noqa: BLE001 - la animacion jamas debe tumbar la app
+            self._show_error(f"pista: {type(exc).__name__}: {exc}")
+
+    def _draw_pista(self, hr=None, zone=None) -> None:
+        """Ovalo tipo velodromo: la bici sobre el trazado en la vuelta en curso."""
+        lap = self.laps
+        st = self.query_one("#pista", Static)
+        w, h = int(st.size.width or 60), int(st.size.height or 12)
+        lap_km = lap.lap_m / 1000.0
+        cur = lap.current
+        zone = zone or self._zone_at(cur.zone_idx or
+                                     zone_for_hr(int(hr or 60), self.config.zones(),
+                                                 self.config.computed_hrmax()).idx)
+        label = f"V{lap.lap_no + 1} · {lap.pos_m / 1000:.2f}/{lap_km:.2f} km"
+        if cur.dist_m:
+            sub = (f"{fmt_clock(cur.elapsed_s)} · {cur.avg_hr:.0f} bpm med "
+                   f"· {cur.avg_watts:.0f} W · {cur.avg_speed:.1f} km/h"
+                   + (" · dist estimada" if lap.estimada else ""))
+        else:
+            sub = "sin distancia: el rodillo no manda 2ACF/2A5B o no pedaleas"
+        st.update(self._track.render(w, h, self._marker, label, sub, zone.color,
+                                     trail=self._trail, lap_km=lap_km))
+
+    def _draw_laps(self, hr=None, zone=None) -> None:
+        """Tablero de vueltas: flash de la ultima cerrada + vuelta en curso + historial."""
+        lap, cfg = self.laps, self.config
+        t = Text()
+        lap_km = lap.lap_m / 1000.0
+
+        flash = lap.just_lapped and time.time() - self._lap_flash < 12
+        if flash:
+            zc = self._zone_at(lap.just_lapped.zone_idx).color
+            t.append(" ⚑ ", style=f"bold {zc}")
+            t.append(f"vuelta {len(lap.laps)} cerrada ", style=f"bold {zc}")
+            t.append(f"{fmt_clock(lap.just_lapped.elapsed_s)} · ", style="#9ca3af")
+            t.append(f"{lap.just_lapped.avg_hr:.0f} bpm med", style="#facc15")
+            t.append(f" · {lap.just_lapped.avg_watts:.0f} W", style="#f97316")
+        t.append("\n")
+
+        cur = lap.current
+        zone = zone or self._zone_at(cur.zone_idx)
+        faltan = max(0.0, lap.lap_m - cur.dist_m) / 1000.0
+        t.append(f" EN PISTA  V{lap.lap_no + 1} ", style=f"bold {zone.color}")
+        t.append(f"{cur.dist_m / 1000:.2f}/{lap_km:.2f} km ", style=SPD_COLOR)
+        t.append(f"faltan {faltan:.2f} ", style="#9ca3af")
+        t.append("│", style="#374151")
+        t.append(f" {fmt_clock(cur.elapsed_s)} ", style="b white")
+        t.append(f" FCmed {cur.avg_hr:.0f} ", style="#facc15")
+        t.append(f" Wmed {cur.avg_watts:.0f} ", style="#f97316")
+        t.append(f" {cur.avg_speed:.1f} km/h ", style=SPD_COLOR)
+        t.append("\n")
+        t.append(f" VUELTAS {len(lap.laps)} ", style="b #9ca3af")
+        t.append(f"· largo {lap_km:.2f} km · total {lap.dist_m / 1000:.2f} km ", style="#6b7280")
+        t.append("· " + ("distancia del rodillo" if not lap.estimada
+                         else "distancia estimada (velocidad)"), style="#6b7280")
+        t.append("\n")
+        for i in range(max(0, len(lap.laps) - 4), len(lap.laps)):
+            lp = lap.laps[i]
+            zc = self._zone_at(lp.zone_idx).color
+            t.append(f"  V{i + 1} ", style=f"bold {zc}")
+            t.append(f"{fmt_clock(lp.elapsed_s):>7} ", style="#9ca3af")
+            t.append(f"avg {lp.avg_hr:>3.0f} ", style="#facc15")
+            t.append(f"max {lp.max_hr:>3} ", style="b #ef4444")
+            t.append(f"{lp.avg_watts:>4.0f}W ", style="#f97316")
+            t.append(f"{lp.kj:>5.1f}kJ ", style="#9ca3af")
+            t.append(f"{lp.dist_m / 1000:>5.2f}km ", style=SPD_COLOR)
+            t.append(f"{lp.avg_cadence:>3.0f}rpm ", style=CAD_COLOR)
+            t.append(f"{self._zone_at(lp.zone_idx).name[:11]}", style=zc)
+            t.append("\n")
+        self.query_one("#lapboard", Static).update(t)

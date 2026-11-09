@@ -30,6 +30,7 @@ class Config:
     export_fit: bool = True
     export_csv: bool = True
     wheel_mm: int = 2135         # perimetro de rueda para velocidad via CSC (28" = 2135)
+    lap_m: int = 5000            # largo de vuelta de la vista pista (en metros)
     last_device: str | None = None  # nombre o direccion de la ultima banda
     last_trainer: str | None = None  # nombre o direccion del ultimo rodillo
 
@@ -52,7 +53,7 @@ def load_config() -> Config:
             data = tomllib.loads(CONFIG_PATH.read_text())
         except Exception:
             return cfg
-        for k in ("age", "sex", "weight", "ftp", "hrmax", "export_dir", "wheel_mm",
+        for k in ("age", "sex", "weight", "ftp", "hrmax", "export_dir", "wheel_mm", "lap_m",
                   "export_fit", "export_csv", "last_device", "last_trainer"):
             if k in data:
                 setattr(cfg, k, data[k])
@@ -81,6 +82,7 @@ def save_config(cfg: Config) -> None:
     lines.append(f"export_fit = {str(cfg.export_fit).lower()}")
     lines.append(f"export_csv = {str(cfg.export_csv).lower()}")
     lines.append(f"wheel_mm = {cfg.wheel_mm}")
+    lines.append(f"lap_m = {cfg.lap_m}")
     if cfg.last_device:
         lines.append(f'last_device = "{cfg.last_device}"')
     if cfg.last_trainer:
