@@ -73,11 +73,29 @@ dashboard le manda el estado una vez por segundo por `stdin`; ella anima localme
 - `3` es un **toggle global**: la escena que se ve es siempre la de la vista activa, y
   el modo **persiste** al cambiar de vista con `h`/`w`/`g`/`p` o `← →`.
 - Escenas: **FC** → barras 3D del historial coloreadas por zona + barra de la FC actual;
-  **watts** → cajas 3D por banda de %FTP (altura = kJ); **tablero** → dial 3D con aro de
-  balizas por zona y aguja; **pista** → velódromo con peralte, meta cuadriculada, estela
-  y marcador.
+  **watts** → cajas 3D por banda de %FTP (altura = kJ); **tablero** → **cluster completo de
+  los 4 diales** (ver abajo); **pista** → velódromo con peralte, meta y estela.
 - Si la ventana se cierra o falla (falta GPU/dependencias), el dashboard **vuelve solo
   a 2D** y sigue grabando; el aviso aparece en la línea de ayuda.
+
+### Cluster del tablero 3D (`g` + `3`)
+
+La vista tablero reproduce en 3D la misma información que la TUI, con los **cuatro diales**
+y todo a pantalla llena (`src/hrdash/cluster.py`):
+
+- **Diales**: FC y potencia (grandes), velocidad y cadencia (medianos). Cada uno con
+  **banda de zonas** en la corona, **palitos** tipo tacómetro (los mayores más altos y
+  anchos) que se **iluminan hasta el valor actual**, aguja con contrapeso y cubo
+  metálico, números de escala y lectura digital en **7 segmentos** en las 6 en punto.
+- **Columna LED** vertical de FC en el centro (roja en el tramo final).
+- **Tira digital**: tiempo / kcal / distancia arriba; FC med·max·%FCmax·estimado y
+  W med·max·FTP·en zona en el centro; zona, muestras, kcal/min, W/kg y edad/peso al pie.
+- **Pilotos** de zona FC y de banda de potencia (el activo encendido) y **halo rojo
+  pulsante** de alarma cuando la FC pasa del 95 % de la máxima.
+- **Self-test** al abrir: las cuatro agujas hacen el barrido 0→máx→0 como un auto real,
+  y después la aguja conserva la inercia de la TUI (sube rápido, baja suave).
+- Los números se dibujan con cajas (7 segmentos y fuente pixel 5×7): no hay atlas de
+  fuente ni dependencias extra de render de texto.
 
 ### Vista pista (`p`)
 

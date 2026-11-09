@@ -383,25 +383,42 @@ class HRDash(App):
         self._hints()
 
     def _gl_snapshot(self) -> dict:
-        """Estado de la sesion, listo para la tuberia del proceso de la ventana."""
+        """Estado de la sesion para el proceso de la ventana (mismo dato que la TUI)."""
         s, cfg, tr = self.session, self.config, self.tr
         hr = int(s.current_hr or (getattr(self.hr, "latest_hr", None) or 0))
         w = int(s.current_watts or ((getattr(tr, "watts", None) or 0) if tr else 0))
+        cad = float(s.current_cadence or ((getattr(tr, "cadence", None) or 0.0) if tr else 0.0))
         spd = float(s.current_speed or ((getattr(tr, "speed_kmh", None) or 0.0) if tr else 0.0))
-        zone = zone_for_hr(hr or 60, cfg.zones(), cfg.computed_hrmax())
-        _lo, _hi, segs = self._hr_scale()
+        zones = cfg.zones()
+        zone = zone_for_hr(hr or 60, zones, cfg.computed_hrmax())
+        band = power_band(w, cfg.ftp)
+        hrmax = int(cfg.computed_hrmax())
         return {
             "view": self.view,
-            "hr": hr, "watts": w, "speed": spd,
-            "hrmax": int(cfg.computed_hrmax()), "ftp": int(cfg.ftp),
-            "zone_color": zone.color,
-            "wzone_color": W_COLORS[power_band(w, cfg.ftp)],
+            "hr": hr, "watts": w, "cadence": cad, "speed": spd,
+            "hrmax": hrmax, "ftp": int(cfg.ftp),
+            "zone_idx": zone.idx, "zone_name": zone.name, "zone_color": zone.color,
+            "wband": band, "wzone_color": W_COLORS[band],
+            "alarm": bool(hr and hr >= 0.95 * hrmax),
+            "max_hr": int(s.max_hr), "avg_hr": float(s.avg_hr), "pct_max": float(s.pct_max),
+            "max_watts": int(s.max_watts), "avg_watts": float(s.avg_watts),
+            "max_speed": float(s.max_speed), "avg_speed": float(s.avg_speed),
+            "max_cadence": float(s.max_cadence), "avg_cadence": float(s.avg_cadence),
+            "elapsed_s": int(s.elapsed_s), "total_kcal": float(s.total_kcal),
+            "dist_km": float(s.dist_km), "n": int(s.n),
+            "zone_secs": int(s.zone_seconds[zone.idx]),
+            "kcal_min": 60.0 * s.total_kcal / max(1, s.elapsed_s) if s.n else 0.0,
+            "wkg": float(s.wkg),
+            "lap_km": float(self.laps.lap_m / 1000.0),
+            "age": int(cfg.age), "weight": float(cfg.weight), "sex": cfg.sex,
             "samples": [(x.hr, x.watts or 0, x.zone_idx) for x in s.window(70)],
             "pzone_kj": [float(x) for x in s.pzone_kj],
-            "zcolors": [z.color for z in cfg.zones()],
+            "pzone_s": [int(x) for x in s.pzone_seconds],
+            "zones": [(float(z.low_pct), min(float(z.high_pct), 100.0), z.color) for z in zones],
+            "bands": [(float(lo), min(float(hi), 900.0), c)
+                      for (_nombre, lo, hi), c in zip(POWER_BANDS, W_COLORS)],
+            "zcolors": [z.color for z in zones],
             "wcolors": list(W_COLORS),
-            "hr_segs": segs,
-            "zone_pcts": [(z.low_pct, z.high_pct) for z in cfg.zones()],
             "lap_m": int(self.laps.lap_m), "lap_frac": float(self.laps.frac),
         }
 
@@ -411,7 +428,7 @@ class HRDash(App):
         try:
             self._glhost.push(self._gl_snapshot())
         except Exception as exc:  # noqa: BLE001 - la ventana nunca interrumpe el muestreo
-            self._gl_msg = f"3D: {type(exc).__name__}"[:60]
+            self._gl_msg = f"3D: {type(exc).__name__}: {exc}"[:80]
             self._kill_gl()
             self._hints()
 

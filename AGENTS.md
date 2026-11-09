@@ -46,6 +46,16 @@ already saved.
 - Drawing must never raise: all render code runs through `_safe_draw()`, workers run with
   `exit_on_error=False`, and any drawing exception triggers a `_RESCATE` export. Sampling has to
   survive UI failures.
+- The 3D window (`glview.py`) runs in a **separate process**: GLFW needs the main thread, which
+  Textual already owns, and `multiprocessing` + `spawn` would re-execute the console entry point
+  (the child would boot another dashboard). It uses `subprocess` + one JSON snapshot per line on
+  stdin; `GLHost` swallows every failure and the TUI silently falls back to 2D. `cluster.py`
+  builds the tablero scene in "panel space" (x right, y up, z toward the driver) and `Mesh.panel()`
+  flips it into world XZ; meshes arrive in three layers (static / values at 1 Hz / needles per
+  frame) because rebuilding all text geometry every frame blows the 20 ms budget.
+- Terminal.app has **no graphics protocol** (no kitty/sixel/iTerm2 inline): a real image cannot be
+  composited inside the TUI, which is why the 3D is a native window. `pyproject` keeps GL deps in
+  the optional `gl` extra; core install must keep working without them.
 
 ## BLE parsing gotchas
 

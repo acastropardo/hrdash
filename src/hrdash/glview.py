@@ -23,30 +23,34 @@ import math
 import time
 
 VS = """#version 330
-in vec3 in_position; in vec3 in_normal; in vec3 in_color;
-out vec3 v_color; out vec3 v_normal;
+in vec3 in_position; in vec3 in_normal; in vec3 in_color; in float in_light;
+out vec3 v_color; out vec3 v_normal; out float v_light;
 uniform mat4 mvp;
 void main(){
     gl_Position = mvp * vec4(in_position, 1.0);
     v_color = in_color;
     v_normal = in_normal;
+    v_light = in_light;
 }"""
 
 FS = """#version 330
-in vec3 v_color; in vec3 v_normal;
+in vec3 v_color; in vec3 v_normal; in float v_light;
 out vec4 o;
 void main(){
-    vec3 L = normalize(vec3(0.35, 0.55, 0.75));
+    vec3 L = normalize(vec3(0.30, -0.55, 0.75));
     float d = max(dot(normalize(v_normal), L), 0.0);
-    o = vec4(v_color * (0.26 + 0.85 * d), 1.0);
+    vec3 lit = v_color * (0.24 + 0.80 * d);
+    vec3 glow = v_color * 1.22;
+    o = vec4(mix(lit, glow, clamp(v_light, 0.0, 1.0)), 1.0);
 }"""
 
 FLOOR = (0.09, 0.10, 0.13)
+VATTR = "3f 3f 3f 1f"                     # posicion, normal, color, emisivo
+FIELDS = ("in_position", "in_normal", "in_color", "in_light")
 GRID = (0.19, 0.22, 0.27)
 ASPHALT = (0.17, 0.18, 0.21)
 EDGE = (0.62, 0.66, 0.70)
 META = (0.90, 0.92, 0.95)
-STEEL = (0.93, 0.95, 0.98)
 ZCOLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
 
 A0, SWEEP = 225.0, 270.0            # barrido del dial (igual que gauges.py)
@@ -66,34 +70,54 @@ def _dial(frac: float) -> float:
 
 
 class Mesh:
-    """Triangulos (posicion, normal, color) en una lista plana de floats."""
+    """Triangulos (posicion, normal, color, emisivo) en una lista plana de floats.
 
-    __slots__ = ("v",)
+    Con `panel(tx, tz)` activado, la geometria se construye en **espacio panel**
+    (x = derecha, y = alto, z = hacia el piloto) y se voltea al mundo al emitir el
+    vertice: (x, y, z) -> (x+tx, -(z+depth), y+tz). Asi los diales se ven de frente.
+    """
+
+    __slots__ = ("v", "t")
 
     def __init__(self):
         self.v: list[float] = []
+        self.t = None                       # (tx, tz, depth) o None = coordenadas de mundo
 
-    def tri(self, a, b, c, col, n=None) -> None:
+    def panel(self, tx, tz, depth=0.0) -> None:
+        self.t = (tx, tz, depth)
+
+    def _wpoint(self, p, n):
+        if self.t is None:
+            return p, n
+        tx, tz, depth = self.t
+        return ((p[0] + tx, -(p[2] + depth), p[1] + tz),
+                (n[0], -n[2], n[1]))
+
+    def tri(self, a, b, c, col, n=None, light=0.0) -> None:
         if n is None:
             ux, uy, uz = (b[i] - a[i] for i in range(3))
             vx, vy, vz = (c[i] - a[i] for i in range(3))
             nx, ny, nz = (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
             ln = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
             n = (nx / ln, ny / ln, nz / ln)
-        for p in (a, b, c):
-            self.v.extend((p[0], p[1], p[2], n[0], n[1], n[2], col[0], col[1], col[2]))
+        pa, na = self._wpoint(a, n)
+        pb, _ = self._wpoint(b, n)
+        pc, _ = self._wpoint(c, n)
+        for p in (pa, pb, pc):
+            self.v.extend((p[0], p[1], p[2], na[0], na[1], na[2],
+                           col[0], col[1], col[2], light))
 
-    def quad(self, a, b, c, d, col, n=None) -> None:
+    def quad(self, a, b, c, d, col, n=None, light=0.0) -> None:
         if n is None:
             ux, uy, uz = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
             vx, vy, vz = (d[0] - a[0], d[1] - a[1], d[2] - a[2])
             nx, ny, nz = (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
             ln = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
             n = (nx / ln, ny / ln, nz / ln)
-        self.tri(a, b, c, col, n)
-        self.tri(a, c, d, col, n)
+        self.tri(a, b, c, col, n, light)
+        self.tri(a, c, d, col, n, light)
 
-    def box(self, cx, cy, cz, sx, sy, sz, col, yaw=0.0) -> None:
+    def box(self, cx, cy, cz, sx, sy, sz, col, yaw=0.0, light=0.0) -> None:
         """Caja de 6 caras centrada en (cx,cy,cz), girada `yaw` rad alrededor de Z."""
         hx, hy, hz = sx / 2.0, sy / 2.0, sz / 2.0
         co, si = (math.cos(yaw), math.sin(yaw)) if yaw else (1.0, 0.0)
@@ -112,7 +136,49 @@ class Mesh:
         )
         for n, cs in faces:
             nx, ny = n[0] * co - n[1] * si, n[0] * si + n[1] * co
-            self.quad(*(tp(*c) for c in cs), col, (nx, ny, n[2]))
+            self.quad(*(tp(*c) for c in cs), col, (nx, ny, n[2]), light)
+
+    def disc(self, cx, cy, cz, r, col, segs=36, light=0.0) -> None:
+        """Disco plano (cara del dial) en espacio panel, normal hacia el piloto."""
+        prev = None
+        for i in range(segs + 1):
+            a = 2 * math.pi * i / segs
+            p = (cx + r * math.cos(a), cy + r * math.sin(a), cz)
+            if prev:
+                self.tri((cx, cy, cz), prev, p, col, (0.0, 0.0, 1.0), light)
+            prev = p
+
+    def ring(self, cx, cy, cz, r0, r1, col, segs=36, light=0.0) -> None:
+        """Anillo plano entre r0 y r1 (bisel/aro iluminado)."""
+        prev = None
+        for i in range(segs + 1):
+            a = 2 * math.pi * i / segs
+            ca, sa = math.cos(a), math.sin(a)
+            p = ((cx + r0 * ca, cy + r0 * sa, cz), (cx + r1 * ca, cy + r1 * sa, cz))
+            if prev:
+                self.quad(prev[0], prev[1], p[1], p[0], col, (0.0, 0.0, 1.0), light)
+            prev = p
+
+    def panel_backplate(self, x0, x1, z0, z1, curve, y0, frame=True) -> None:
+        """Capota curva detras del cluster (en coordenadas de mundo, XZ)."""
+        k = 20
+        prev = None
+        span = max(0.001, max(abs(x0), abs(x1)))
+        for i in range(k + 1):
+            x = x0 + (x1 - x0) * i / k
+            y = y0 + curve * (x / span) ** 2
+            if prev is not None:
+                self.quad((prev[0], prev[1], z0), (x, y, z0), (x, y, z1),
+                          (prev[0], prev[1], z1), (0.075, 0.085, 0.105),
+                          (0.0, -1.0, 0.02))
+            prev = (x, y)
+        if frame:
+            steel = (0.26, 0.29, 0.34)
+            self.box(0, y0 + curve, z1 + 0.24, x1 - x0 + 0.9, 0.12, 0.28, steel)
+            self.box(0, y0 + curve * 0.6, z0 - 0.24, x1 - x0 + 0.9, 0.12, 0.28, steel)
+            for sx in (x0 - 0.40, x1 + 0.40):
+                self.box(sx, y0 + curve, (z0 + z1) / 2, 0.16, 0.12,
+                         z1 - z0 + 0.6, steel)
 
     def ribbon(self, pts, half, bank, col, off=0.0) -> None:
         """Cinta continua sobre el trazado `pts` (x,y,tx,ty): peralte + desplazamiento.
@@ -133,18 +199,22 @@ class Mesh:
                 self.quad(prev[0], prev[1], outer, inner, col, (0.0, 0.0, 1.0))
             prev = (inner, outer)
 
-    def floor(self, size=3.2, step=0.4, col=GRID) -> None:
-        """Piso con grilla: un platano oscuro + lineas finas."""
-        self.box(0, 0, -0.04, 2 * size, 2 * size, 0.06, FLOOR)
+    def floor(self, size=3.2, step=0.4, col=GRID, z0=0.0) -> None:
+        """Piso con grilla: un platano oscuro + lineas finas, apoyado en z0."""
+        self.box(0, 0, z0 - 0.04, 2 * size, 2 * size, 0.06, FLOOR)
         k = max(1, int(2 * size / step))
         for i in range(k + 1):
             p = -size + i * (2 * size / k)
-            self.box(p, 0, -0.005, 0.012, 2 * size, 0.012, col)
-            self.box(0, p, -0.005, 2 * size, 0.012, 0.012, col)
+            self.box(p, 0, z0 - 0.005, 0.012, 2 * size, 0.012, col)
+            self.box(0, p, z0 - 0.005, 2 * size, 0.012, 0.012, col)
+
+    def merge(self, other: "Mesh") -> None:
+        """Anexa otra malla (ya transformada): un solo VBO para todo el cluster."""
+        self.v.extend(other.v)
 
     @property
     def tris(self) -> int:
-        return len(self.v) // 54
+        return len(self.v) // 30
 
 
 # ---------------------------------------------------------------- matrices
@@ -173,15 +243,16 @@ def look_at(eye, center, up=(0.0, 0.0, 1.0)):
     return m
 
 
-def orbit(t, radius, height, speed=0.25, phase=0.0, center=(0.0, 0.0, 0.5)):
-    """Camara orbital lenta: devuelve (eye, center, up, fovy)."""
+def orbit(t, radius, height, speed=0.25, phase=0.0, center=(0.0, 0.0, 0.5), aspect=1.6):
+    """Camara orbital lenta, retrocediendo si el panel es mas ancho que alto."""
     a = t * speed + phase
-    eye = (math.sin(a) * radius, -math.cos(a) * radius, height)
+    d = radius * max(1.0, 1.55 / max(0.4, aspect))
+    eye = (math.sin(a) * d, -math.cos(a) * d, height * max(1.0, 1.55 / max(0.4, aspect)))
     return eye, center, (0.0, 0.0, 1.0), 0.85
 
 
 # ---------------------------------------------------------------- escenas
-def scene_hr(snap, anim) -> tuple[Mesh, tuple]:
+def scene_hr(snap, anim, aspect=1.6):
     """Barras 3D del historial de FC + barra destacada de la FC actual."""
     m = Mesh()
     m.floor()
@@ -199,10 +270,10 @@ def scene_hr(snap, anim) -> tuple[Mesh, tuple]:
     if hr:
         h = max(0.08, (hr - 40.0) / max(1.0, hrmax - 40.0) * 2.1)
         m.box(2.75, 0.0, h / 2.0, 0.24, 0.7, h, _hex(snap.get("zone_color") or "#ef4444"))
-    return m, orbit(anim["t"], 5.6, 2.9, 0.18, center=(0.0, 0.0, 0.8))
+    return [("frame", m)], orbit(anim["t"], 5.6, 2.9, 0.18, center=(0.0, 0.0, 0.8), aspect=aspect)
 
 
-def scene_watts(snap, anim) -> tuple[Mesh, tuple]:
+def scene_watts(snap, anim, aspect=1.6):
     """Cajas 3D por banda de %FTP (altura = kJ) + caja del wattaje actual al frente."""
     m = Mesh()
     m.floor()
@@ -219,54 +290,14 @@ def scene_watts(snap, anim) -> tuple[Mesh, tuple]:
     if w_now:
         h = max(0.08, w_now / (ftp * 1.6) * 3.0)
         m.box(0.0, -2.7, h / 2.0, 0.55, 0.55, h, _hex(snap.get("wzone_color") or "#facc15"))
-    return m, orbit(anim["t"], 5.9, 3.2, 0.24, phase=0.6, center=(0.0, 0.0, 0.7))
+    return [("frame", m)], orbit(anim["t"], 5.9, 3.2, 0.24, phase=0.6,
+                                 center=(0.0, 0.0, 0.7), aspect=aspect)
 
 
-def scene_gauge(snap, anim) -> tuple[Mesh, tuple]:
-    """Dial 3D: aro de balizas por zona, cubo central y aguja con inercia."""
-    m = Mesh()
-    lo, hi = 40.0, max(60.0, float(snap.get("hrmax") or 190) + 10.0)
-    segs = snap.get("hr_segs") or []
-    zs = snap.get("zcolors") or ZCOLORS
-    m.box(0.0, 0.0, -0.10, 3.7, 3.7, 0.16, (0.12, 0.13, 0.16))
-    for i in range(61):
-        f = i / 60.0
-        a = _dial(f)
-        col = (0.24, 0.27, 0.31)
-        for k, zc in enumerate(zs):
-            z0, z1 = _zone_fracs(k, snap)
-            if z0 <= f < z1:
-                col = _hex(zc)
-                break
-        if segs:
-            for f0, f1, chex in segs:
-                if f0 <= f <= f1:
-                    col = _hex(chex)
-                    break
-        m.box(math.cos(a) * 1.55, math.sin(a) * 1.55, 0.02, 0.12, 0.12, 0.14, col, yaw=a)
-    zc = _hex(snap.get("zone_color") or "#ef4444")
-    m.box(0.0, 0.0, 0.14, 0.40, 0.40, 0.26, zc)
-    hr = float(snap.get("hr") or 0)
-    anim["needle"] += (hr - anim["needle"]) * 0.14          # inercia, como en la TUI
-    a = _dial((anim["needle"] - lo) / max(1e-6, hi - lo))
-    ln = 1.22
-    m.box(math.cos(a) * ln * 0.45, math.sin(a) * ln * 0.45, 0.30,
-          ln, 0.10, 0.07, STEEL, yaw=a)
-    return m, orbit(anim["t"], 4.6, 3.0, 0.14, center=(0.0, 0.0, 0.35))
-
-
-def _zone_fracs(k, snap):
-    """Fracciones (0..1) que ocupa la zona k del historial de FC sobre el dial."""
-    hrmax = max(60.0, float(snap.get("hrmax") or 190))
-    pcts = snap.get("zone_pcts")
-    if not pcts or k >= len(pcts):
-        return (1.1, 1.1)
-    lo, hi = 40.0, hrmax + 10.0
-    a, b = pcts[k]
-    b = 100.0 if b is None else float(b)
-    f0 = max(0.0, min(1.0, (a / 100.0 * hrmax - lo) / (hi - lo)))
-    f1 = max(0.0, min(1.0, (min(b, 100.0) / 100.0 * hrmax - lo) / (hi - lo)))
-    return f0, f1
+def scene_gauge(snap, anim, aspect=1.6):
+    """Cluster completo: los 4 diales + tira digital, llenando la ventana."""
+    from .cluster import CLUSTER                  # lazy: cluster importa de aqui
+    return CLUSTER.build(snap, anim, aspect)
 
 
 def oval(cx, cy, steps=30):
@@ -286,7 +317,7 @@ def oval(cx, cy, steps=30):
     return pts
 
 
-def scene_pista(snap, anim) -> tuple[Mesh, tuple]:
+def scene_pista(snap, anim, aspect=1.6):
     """Velodromo con peralte, meta cuadriculada, estela y marcador de la bici."""
     m = Mesh()
     cx, cy = 2.15, 1.30
@@ -315,7 +346,7 @@ def scene_pista(snap, anim) -> tuple[Mesh, tuple]:
               tuple(c * (1.0 - k / 14.0) for c in col))
     x, y, tx, ty = pts[min(n, max(0, int(anim["frac"] * n)))]
     m.box(x, y, 0.34, 0.40, 0.22, 0.34, col, yaw=math.atan2(ty, tx))
-    return m, orbit(anim["t"], 5.2, 3.4, 0.16, center=(0.0, 0.0, 0.25))
+    return [("frame", m)], orbit(anim["t"], 5.2, 3.4, 0.16, center=(0.0, 0.0, 0.25), aspect=aspect)
 
 
 def _at(pts, f):
@@ -359,10 +390,12 @@ def child_main() -> None:
         prog = ctx.program(vertex_shader=VS, fragment_shader=FS)
         ctx.enable(moderngl.DEPTH_TEST)
         feed = _stdin_feed()
-        vao = None
+        vaos: dict = {}
         snap = {"view": "hr", "hr": 0, "hrmax": 180, "samples": [], "zone_color": "#ef4444"}
-        anim = {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0}
+        anim = {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0,
+                "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0}
         clock = time.time()
+        last_view, frames, report_t, work = None, 0, time.time(), 0.0
         while not glfw.window_should_close(win):
             t0 = time.time()
             anim["t"] = t0 - clock
@@ -371,25 +404,43 @@ def child_main() -> None:
                 break                                       # el dashboard cerro la tuberia
             if got is not None:
                 snap = got
-            fn = SCENES.get(snap.get("view", "hr"), scene_hr)
-            mesh, cam = fn(snap, anim)
-            data = np.asarray(mesh.v or [0.0] * 54, dtype="f4")
-            if vao is not None:
-                vao.release()
-            vbo = ctx.buffer(data.tobytes())
-            vao = ctx.vertex_array(prog, [(vbo, "3f 3f 3f",
-                                           "in_position", "in_normal", "in_color")])
-            eye, center, up, fovy = cam
             w, h = glfw.get_framebuffer_size(win)
-            mvp = perspective(fovy, max(0.25, w / max(1, h))) @ look_at(eye, center, up)
+            aspect = max(0.25, w / max(1, h))
+            view = snap.get("view", "hr")
+            fn = SCENES.get(view, scene_hr)
+            if view != last_view:                            # otra vista: tira las capas
+                last_view = view
+                for v in vaos.values():
+                    v.release()
+                vaos.clear()
+            dyn_layers, cam = fn(snap, anim, aspect)
+            for name, mesh in dyn_layers:
+                if mesh is None:
+                    continue                       # capa sin cambios: conserva su VBO
+                old = vaos.get(name)
+                if old is not None:
+                    old.release()
+                buf = ctx.buffer(np.asarray(mesh.v or [0.0] * 10, dtype="f4").tobytes())
+                vaos[name] = ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)])
+            eye, center, up, fovy = cam
+            mvp = perspective(fovy, aspect) @ look_at(eye, center, up)
             prog["mvp"].write(np.ascontiguousarray(mvp.T, dtype="f4").tobytes())
             ctx.clear(*FLOOR, 1.0)
-            vao.render(moderngl.TRIANGLES)
+            for v in vaos.values():
+                v.render(moderngl.TRIANGLES)
             glfw.swap_buffers(win)
             glfw.poll_events()
+            frames += 1
+            if frames >= 60:
+                now = time.time()
+                _emit({"fps": round(frames / max(1e-6, now - report_t), 1),
+                       "ms": round(1000 * work / max(1, frames), 1)})
+                frames, report_t, work = 0, now, 0.0
+            work += time.time() - t0
             time.sleep(max(0.0, 0.02 - (time.time() - t0)))
-        if vao is not None:
-            vao.release()
+        for v in list(vaos.values()):
+            v.release()
+        vaos.clear()
         glfw.destroy_window(win)
     except Exception as exc:  # noqa: BLE001 - la ventana nunca tumba el dashboard
         err = f"{type(exc).__name__}: {exc}"
