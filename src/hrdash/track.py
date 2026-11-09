@@ -27,18 +27,6 @@ RIDER = "#f8fafc"      # marcador de la bici
 MARGIN = 2             # pixels de margen del framebuffer
 BAND = 3               # grosor de la banda de asfalto (en pixels)
 MIN_STRAIGHT = 8       # recta minima para que parezca un circuito y no un circulo
-BACK = "#111827"       # color de fondo para atenuar el costado lejano (vista 3d)
-
-
-def _mix(color: str, other: str, f: float) -> str:
-    """Mezcla dos hex en la proporcion `f` de `other` (para atenuar la distancia)."""
-    try:
-        r1, g1, b1 = (int(color[i:i + 2], 16) for i in (1, 3, 5))
-        r2, g2, b2 = (int(other[i:i + 2], 16) for i in (1, 3, 5))
-        return (f"#{int(r1 + (r2 - r1) * f):02x}"
-                f"{int(g1 + (g2 - g1) * f):02x}{int(b1 + (b2 - b1) * f):02x}")
-    except Exception:  # noqa: BLE001 - color inesperado: dejarlo tal cual
-        return color
 
 
 def _geo(w: int, dh: int):
@@ -71,41 +59,31 @@ class Track:
         self._cum: list[float] = []        # longitud acumulada de cada punto
         self._pts: list[tuple[float, float]] = []
         self._total = 0.0
-        self._persp = False                 # vista 3d: proyecta el ovalo con perspectiva
-        self._cx = 0.0
-        self._cy = 0.0
-        self._r_out = 0.0
 
     # ---- fondo cacheado ----
     def _build_bg(self, w, dh, lap_km):
         pw, pph, ax, bx, cy, r_out, band = self._geo
-        self._cx, self._cy, self._r_out = pw / 2.0, cy, r_out
         r_in = r_out - band
         px = Px()
-
-        def tone(col, y):
-            """En vista 3d atenua el costado lejano (lo que queda sobre el eje)."""
-            return _mix(col, BACK, 0.5) if (self._persp and y < self._cy) else col
-
         # polyline del centro del trazado (meta en el medio de la recta de arriba)
         pts = self._path(ax, bx, cy, r_out - band / 2.0)
         # asfalto: eje discontinuo (se ve como pista sin rellenar, para que el
         # marcador no se pierda cuando la terminal no pinta colores)
         for i, (x, y) in enumerate(pts):
             if i % 4 == 0:
-                px.put(x, y, 1, tone(DIM, y))
+                px.put(x, y, 1, DIM)
         # bordes: desplazados +/- (band/2 + 1) sobre la normal
         for i, (x, y) in enumerate(pts):
             n = self._normal(x, y, ax, bx, cy)
             d = band / 2.0 + 1
-            px.put(x + n[0] * d, y + n[1] * d, 2, tone(EDGE, y))
-            px.put(x - n[0] * d, y - n[1] * d, 2, tone(INNER, y))
+            px.put(x + n[0] * d, y + n[1] * d, 2, EDGE)
+            px.put(x - n[0] * d, y - n[1] * d, 2, INNER)
         # linea de meta cuadriculada en el centro de la recta superior
         mx = (ax + bx) / 2.0
         my = cy - (r_out - band / 2.0)
         for i in range(int(band) + 2):
             yy = my + (i - band / 2.0)
-            px.put(mx, yy, 4, tone(META if i % 2 == 0 else "#111827", my))
+            px.put(mx, yy, 4, META if i % 2 == 0 else "#111827")
         # marcas de cuarto de vuelta (1/4, 1/2, 3/4 de la vuelta): la fuente 3x5 no
         # cabe entera en una celda braille de 2x4, asi que solo se dibuja el tick.
         for f in (0.25, 0.5, 0.75):
@@ -113,8 +91,8 @@ class Track:
             idx = bisect.bisect_right(self._cum, s) - 1
             x, y = pts[max(0, idx)]
             n = self._normal(x, y, ax, bx, cy)
-            px.line(x, y, x + n[0] * band, y + n[1] * band, 3, tone(MARK, y))
-            px.line(x, y, x - n[0] * (band + 3), y - n[1] * (band + 3), 3, tone(LABEL, y))
+            px.line(x, y, x + n[0] * band, y + n[1] * band, 3, MARK)
+            px.line(x, y, x - n[0] * (band + 3), y - n[1] * (band + 3), 3, LABEL)
         return px
 
     def _path(self, ax, bx, cy, rm):
@@ -126,10 +104,6 @@ class Track:
 
         def add(x, y):
             nonlocal acc, prev
-            if self._persp:
-                span = max(self._r_out, 1.0)
-                k = max(0.5, 1.0 - 0.32 * abs(y - self._cy) / span)
-                x, y = self._cx + (x - self._cx) * k, self._cy + (y - self._cy) * k
             if prev:
                 acc += math.hypot(x - prev[0], y - prev[1])
             pts.append((x, y))
@@ -176,17 +150,15 @@ class Track:
         return x, y, dx / ln, dy / ln
 
     # ---- frame completo ----
-    def render(self, w, h, frac, label, sub, color, trail=(), lap_km=None,
-               persp: bool = False) -> Text:
+    def render(self, w, h, frac, label, sub, color, trail=(), lap_km=None) -> Text:
         w, h = int(max(12, w or 12)), int(max(4, h or 4))
         lap_km = lap_km if lap_km else 5.0
         dh = h - 2
         geo = _geo(w, dh)
         if not geo:
             return self._fallback(w, label, sub, color, frac)
-        sig = (w, dh, round(lap_km, 2), persp)
+        sig = (w, dh, round(lap_km, 2))
         if sig != self._sig:
-            self._persp = persp
             self._geo = geo
             self._bg = self._build_bg(w, dh, lap_km)
             self._sig = sig
