@@ -58,6 +58,23 @@ Teclas dentro del dashboard:
 | `←` / `→` | navegar entre vistas: **FC → watts → tablero → pista** (la ayuda marca la activa) |
 | `[` / `]` | en la vista pista: recorre los largos de vuelta (1, 2, 3, **5**, 10, 20 km) |
 
+### Vistas en 3D (tecla `3`)
+
+La tecla `3` es un **toggle global**: alterna la vista activa entre su escena **3D** y la
+vista **2D** de siempre. El modo persiste al cambiar de vista con `h`/`w`/`g`/`p` o `← →`,
+y solo se cambia volviendo a pulsar `3`. Cada vista tiene su equivalente 3D
+(`src/hrdash/v3d.py`):
+
+| vista | 2D | 3D |
+|---|---|---|
+| `h` FC | barras de 1 muestra/segundo | **cilindro** con el nivel de FC (líquido coloreado por zona, bandas en la pared) |
+| `w` watts | barras por banda de %FTP | **cajas extruidas** por banda (kJ), frente + cara lateral + tapa |
+| `g` tablero | diales braille de 270° | **dial elíptico** (círculo visto en ángulo) con arco de zonas y aguja |
+| `p` pista | óvalo en planta | óvalo con **proyección en perspectiva** (keystone y costado lejano atenuado) |
+
+En modo 3D los mosaicos gigantes, la tira de velocidad/cadencia, las estadísticas y los
+paneles de zonas siguen vivos; lo que cambia de render es el gráfico principal.
+
 ### Vista pista (`p`)
 
 Circuito dibujado en celdas braille: dos rectas y dos semicírculos, con la línea de

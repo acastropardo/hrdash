@@ -216,6 +216,8 @@ class HRDash(App):
         self._last_autosave = time.time()
         self._gauges = {"g_hr": Gauge(), "g_w": Gauge(),
                         "g_v": Gauge(), "g_c": Gauge()}
+        self._gauges3 = {"g_hr": v3d.Gauge3(), "g_w": v3d.Gauge3(),
+                         "g_v": v3d.Gauge3(), "g_c": v3d.Gauge3()}
         self._needle = {"hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0}
         self.laps = LapTracker(config.lap_m, config)
         self._track = Track()
@@ -455,8 +457,18 @@ class HRDash(App):
             self._safe_draw(self._draw_laps, hr, zone)
         elif self.view == "hr" and self.gl:
             self._safe_draw(self._draw_hr_3d, hr, zone)
+            self._safe_draw(self._draw_tiles, hr, zone)
+            self._safe_draw(self._draw_vc)
+            self._safe_draw(self._draw_stats)
+            self._safe_draw(self._draw_zones)
+            self._safe_draw(self._draw_zones_w)
         elif self.view == "watts" and self.gl:
             self._safe_draw(self._draw_watts_3d)
+            self._safe_draw(self._draw_tiles, hr, zone)
+            self._safe_draw(self._draw_vc)
+            self._safe_draw(self._draw_stats)
+            self._safe_draw(self._draw_zones)
+            self._safe_draw(self._draw_zones_w)
         else:
             self._safe_draw(self._draw_tiles, hr, zone)
             self._safe_draw(self._draw_charts, zone)
@@ -629,7 +641,13 @@ class HRDash(App):
             ch_strip.update(self._w_chart(samples, 4, width))
 
         # velocidad y cadencia: 1 fila de glifos de 8 niveles cada una
+        self._draw_vc()
+
+    def _draw_vc(self) -> None:
+        """Tira de velocidad/cadencia (glifos de 8 niveles), comun a la vista 2D y 3D."""
         vc = self.query_one("#ch_vc", Static)
+        width = max(20, (self.query_one("#ch_hr", Static).size.width or 80) - 9)
+        samples = self.session.window(width)
         v_top = max(40.0, max(((x.speed_kmh or 0) for x in samples), default=0) + 2)
         c_top = max(140.0, max(((x.cadence or 0) for x in samples), default=0) + 15)
         line_v, line_c = Text("VEL "), Text("CAD ")
@@ -722,24 +740,27 @@ class HRDash(App):
         self.query_one("#zones_w", Static).update(t)
 
     def _draw_hr_3d(self, hr, zone) -> None:
-        """Vista grafica 3D: barras de tiempo en zona (una por zona) con profundidad."""
-        s, cfg = self.session, self.config
-        items = [(z.name, float(s.zone_seconds[z.idx]), z.color) for z in cfg.zones()]
+        """Escena 3D de FC: cilindro con el nivel actual y las zonas sobre la pared."""
+        s = self.session
+        lo, hi, segs = self._hr_scale()
+        frac = max(0.0, min(1.0, (hr - lo) / max(1e-6, hi - lo))) if hr else 0.0
+        sub = f"bpm · Z{zone.idx} {zone.name} · media {s.avg_hr:.0f} · max {s.max_hr}"
         st = self.query_one("#ch_hr", Static)
-        st.update(v3d.render_bars_3d(int(st.size.width or 80), int(st.size.height or 8), items))
-        # tira chica: la otra metrica (watts) en la grafica 2D equivalente
+        st.update(v3d.render_cylinder(int(st.size.width or 80), int(st.size.height or 8),
+                                      frac, zone.color, segs, str(hr) if hr else "--", sub))
+        # tira chica: la otra metrica (watts) sigue en su grafica 2D
         ch_w = self.query_one("#ch_w", Static)
         width = max(20, (st.size.width or 80) - 9)
         ch_w.update(self._w_chart(s.window(width), 4, width))
 
     def _draw_watts_3d(self) -> None:
-        """Vista grafica 3D: barras de trabajo (kJ) por banda de potencia, con profundidad."""
+        """Escena 3D de potencia: cajas extruidas por banda de %FTP (kJ acumulado)."""
         s = self.session
         items = [(name, float(kj), col) for (name, _lo, _hi), kj, col
                  in zip(POWER_BANDS, s.pzone_kj, W_COLORS)]
         st = self.query_one("#ch_hr", Static)
-        st.update(v3d.render_bars_3d(int(st.size.width or 80), int(st.size.height or 8), items))
-        # tira chica: la otra metrica (FC) en la grafica 2D equivalente
+        st.update(v3d.render_boxes_3d(int(st.size.width or 80), int(st.size.height or 8), items))
+        # tira chica: la otra metrica (FC) sigue en su grafica 2D
         ch_w = self.query_one("#ch_w", Static)
         width = max(20, (st.size.width or 80) - 9)
         ch_w.update(self._hr_chart(s.window(width), 4, width))
@@ -794,16 +815,10 @@ class HRDash(App):
     def _render_gauge(self, wid: str, value, lo, hi, segs, major, minor,
                       label, sub, color, big=False, avg=None) -> None:
         st = self.query_one(f"#{wid}", Static)
-        if self.gl:
-            t = v3d.render_gauge_3d(st.size.width or 40, st.size.height or 16, value,
-                                    lo, hi, segs, major, minor, label, sub, color,
-                                    big=big, avg=avg)
-        else:
-            g = self._gauges[wid]
-            t = g.render(st.size.width or 40, st.size.height or 16, value,
-                         lo, hi, segs, major, minor, label, sub, color,
-                         big=big, avg=avg)
-        st.update(t)
+        g = self._gauges3[wid] if self.gl else self._gauges[wid]
+        st.update(g.render(st.size.width or 40, st.size.height or 16, value,
+                           lo, hi, segs, major, minor, label, sub, color,
+                           big=big, avg=avg))
 
     def _draw_cluster(self) -> None:
         s, cfg = self.session, self.config
