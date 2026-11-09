@@ -52,7 +52,12 @@ already saved.
   stdin; `GLHost` swallows every failure and the TUI silently falls back to 2D. `cluster.py`
   builds the tablero scene in "panel space" (x right, y up, z toward the driver) and `Mesh.panel()`
   flips it into world XZ; meshes arrive in three layers (static / values at 1 Hz / needles per
-  frame) because rebuilding all text geometry every frame blows the 20 ms budget.
+  frame) because rebuilding all text geometry every frame blows the 20 ms budget — the strip
+  **labels** belong to the static layer, only their **values** to the 1 Hz one.
+- `glfw` sizes are **points, not pixels**: `_plan_window()` targets 1920×1080 physical pixels,
+  dividing by the monitor `content scale` (Retina ×2 → 960×540 pts) and picking a monitor whose
+  work area can host it; the module prints `{"win":[...],"fb":[...]}` on stdout so the chosen
+  size can be asserted from tests.
 - Terminal.app has **no graphics protocol** (no kitty/sixel/iTerm2 inline): a real image cannot be
   composited inside the TUI, which is why the 3D is a native window. `pyproject` keeps GL deps in
   the optional `gl` extra; core install must keep working without them.

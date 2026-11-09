@@ -357,6 +357,56 @@ def _at(pts, f):
 SCENES = {"hr": scene_hr, "watts": scene_watts, "gauge": scene_gauge, "pista": scene_pista}
 
 
+def _plan_window(glfw, want=(1920, 1080)):
+    """Elige monitor y tamano de ventana apuntando a `want` **pixels fisicos**.
+
+    GLFW pide tamanos en puntos: en una pantalla Retina (content scale 2) una ventana
+    de 960x540 puntos renderiza a 1920x1080 reales. Se elige el monitor cuya area util
+    pueda alojar esos pixels y se centra alli la ventana; si ninguno puede, se baja a
+    el 16:9 mas grande que quepa.
+    """
+    try:
+        mons = [m for m in (glfw.get_monitors() or []) if m]
+    except Exception:  # noqa: BLE001 - API ausente: se usa el primario
+        prim = glfw.get_primary_monitor()
+        mons = [prim] if prim else []
+
+    def info(m):
+        mode = glfw.get_video_mode(m)
+        sx = sy = 1.0
+        try:
+            got = glfw.get_monitor_content_scale(m)
+            if got and got[0]:
+                sx, sy = float(got[0]), float(got[1] or got[0])
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _x, _y, wa, ha = glfw.get_monitor_workarea(m)
+        except Exception:  # noqa: BLE001
+            wa = int((mode.size.width or want[0]) / sx)
+            ha = int((mode.size.height or want[1]) / sy)
+            _x = _y = 0
+        return {"pos": (_x, _y), "pts": (int(wa), int(ha)), "scale": (sx, sy),
+                "px": (int(wa * sx), int(ha * sy))}
+
+    if not mons:
+        return (want[0], want[1]), None
+    cand = [(m, info(m)) for m in mons]
+    # ordena por pixeles utiles: el monitor mas grande que soporte lo pedido
+    roomy = [(m, d) for m, d in cand
+             if d["px"][0] >= want[0] and d["px"][1] >= want[1]]
+    if roomy:
+        mon, d = max(roomy, key=lambda t: t[1]["px"][0] * t[1]["px"][1])
+        sx, sy = d["scale"]
+        size = (max(640, int(want[0] / sx)), max(360, int(want[1] / sy)))
+        return size, mon
+    mon, d = max(cand, key=lambda t: t[1]["px"][0] * t[1]["px"][1])
+    sx, sy = d["scale"]
+    k = min(d["pts"][0] * sx / float(want[0]), d["pts"][1] * sy / float(want[1]))
+    size = (max(800, int(want[0] * k / sx)), max(450, int(want[1] * k / sy)))
+    return size, mon
+
+
 # ---------------------------------------------------------------- proceso hijo
 def child_main() -> None:
     """Entrada del proceso hijo (`python -m hrdash.glview`): ventana GLFW + render.
@@ -381,9 +431,20 @@ def child_main() -> None:
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE)
-        win = glfw.create_window(900, 580, "HRDash 3D", None, None)
-        if not win:
+        glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
+        size, mon = _plan_window(glfw, (1920, 1080))
+        win = glfw.create_window(size[0], size[1], "HRDash 3D", None, None)
+        if win is None:
             raise RuntimeError("glfw no pudo crear la ventana")
+        if mon is not None:
+            try:                                   # centrada en el monitor que la aloja
+                xa, ya, wa, ha = glfw.get_monitor_workarea(mon)
+                glfw.set_window_pos(win, int(xa + (wa - size[0]) / 2),
+                                    int(ya + (ha - size[1]) / 2))
+            except Exception:  # noqa: BLE001 - centrar es decorativo
+                pass
+        fbw, fbh = glfw.get_framebuffer_size(win)
+        _emit({"win": list(size), "fb": [fbw, fbh]})   # puntos reales y pixels del buffer
         glfw.make_context_current(win)
         glfw.swap_interval(1)
         ctx = moderngl.create_context()

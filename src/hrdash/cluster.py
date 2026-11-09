@@ -135,7 +135,7 @@ def draw_text(mesh, x, y, z, h, s, col, light=0.0, align="l", depth=0.03) -> Non
                 while c + run < 5 and bits[c + run] == "1":
                     run += 1
                 mesh.box(gx + (c + run / 2.0 - 0.5) * px, y + (3.0 - row) * px, z,
-                         run * px + px * 0.30, px * 1.30, depth, col, light=light)
+                         run * px + px * 0.18, px * 0.82, depth, col, light=light)
                 c += run
 
 
@@ -185,10 +185,10 @@ def dial_static(m, r, lo, hi, segs, major, minor, label, unit, big=True):
     Estructura de tacometro: banda de zonas en la corona, palitos por dentro, numeros
     todavia mas adentro, lectura digital en el hueco de las 12 y nombre/unidad abajo.
     """
-    m.disc(0, 0, 0.0, r * 1.06, (0.115, 0.128, 0.150), segs=44)   # corona externa
-    m.disc(0, 0, 0.014, r, (0.205, 0.225, 0.255), segs=44)              # cara
-    m.ring(0, 0, 0.026, r, r * 1.06, (0.40, 0.45, 0.52), segs=44, light=0.2)
-    m.ring(0, 0, 0.03, r * 0.50, r * 0.515, (0.30, 0.34, 0.40), segs=40)
+    m.disc(0, 0, 0.0, r * 1.06, (0.115, 0.128, 0.150), segs=76)   # corona externa
+    m.disc(0, 0, 0.014, r, (0.205, 0.225, 0.255), segs=76)              # cara
+    m.ring(0, 0, 0.026, r, r * 1.06, (0.40, 0.45, 0.52), segs=76, light=0.2)
+    m.ring(0, 0, 0.03, r * 0.50, r * 0.515, (0.30, 0.34, 0.40), segs=72)
     for f0, f1, chex in segs:                        # banda de zonas, ancha y legible
         col = _hex(chex)
         prev = None
@@ -202,7 +202,7 @@ def dial_static(m, r, lo, hi, segs, major, minor, label, unit, big=True):
                 m.box(mid[0], mid[1], 0.05, ln + r * 0.03, r * 0.13, 0.05,
                       col, yaw=math.atan2(p[1] - prev[1], p[0] - prev[0]), light=0.65)
             prev = p
-            g += 0.006
+            g += 0.004
             if f0 == f1:
                 break
     if minor and hi > lo and major:
@@ -262,7 +262,7 @@ def dial_frame(m, r, value, lo, hi, major, minor, redline, col_now, alarm):
     m.box(-ca * r * 0.14, -sa * r * 0.14, 0.15, r * 0.28, r * 0.09, r * 0.065,
           nc, yaw=a, light=0.3)
     m.box(0, 0, 0.12, r * 0.19, r * 0.19, r * 0.11, (0.20, 0.23, 0.28))
-    m.ring(0, 0, 0.185, r * 0.065, r * 0.105, col_now, segs=16, light=0.95)
+    m.ring(0, 0, 0.185, r * 0.065, r * 0.105, col_now, segs=28, light=0.95)
 
 
 def dial_values(m, r, digits, dh, alarm, avg=None):
@@ -326,6 +326,10 @@ class Cluster:
             one.panel(cx, cz)
             dial_static(one, r, lo, hi, segs, major, minor, label, unit, big=r >= 0.9)
             m.merge(one)
+        lab = Mesh()
+        lab.panel(0.0, 0.0)                        # etiquetas de las tiras: no cambian nunca
+        _labels(lab)
+        m.merge(lab)
         return m
 
     # ---- valores (1 Hz): digitos de cada dial, barra LED, pilotos y tiras ----
@@ -342,9 +346,12 @@ class Cluster:
                         alarm and which == "hr", avg=avgs.get(which))
             m.merge(one)
         zc = _hex(snap.get("zone_color") or "#ef4444")
-        _led_bar(m, float(snap.get("hr") or 0), cfg["hr"][0], cfg["hr"][1], zc)
-        _lamps(m, snap)
-        _strips(m, snap)
+        sub = Mesh()
+        sub.panel(0.0, 0.0)                        # espacio panel: y alto, z hacia el piloto
+        _led_bar(sub, float(snap.get("hr") or 0), cfg["hr"][0], cfg["hr"][1], zc)
+        _lamps(sub, snap)
+        _strips(sub, snap)
+        m.merge(sub)
         return m
 
     # ---- por frame: palitos iluminados y agujas con inercia ----
@@ -376,7 +383,7 @@ class Cluster:
             _w, cx, cz, r = DIALS[0][0], DIALS[0][1], DIALS[0][2], DIALS[0][3]
             one = Mesh()
             one.panel(cx, cz)
-            one.ring(0, 0, 0.03, r * 1.14, r * 1.21, (0.98, 0.30, 0.24), segs=36,
+            one.ring(0, 0, 0.03, r * 1.14, r * 1.21, (0.98, 0.30, 0.24), segs=64,
                      light=0.5 + 0.5 * p)
             m.merge(one)
         return m
@@ -438,80 +445,89 @@ def _cam(anim, aspect):
     return eye, (0.0, 0.0, -0.14), (0.0, 0.0, 1.0), fovy
 
 
+def _labels(m):
+    """Etiquetas fijas de las tiras: van en la capa estatica (no cambian nunca)."""
+    h = 0.18
+    for i, lab in enumerate(("TIEMPO", "KCAL", "DIST KM", "ATLETA")):
+        x = 1.72 if lab == "ATLETA" else -3.62 + i * 1.78
+        draw_text(m, x, 2.46, 0.05, h * 0.70, lab, DIM, light=0.9)
+    for i, lab in enumerate(("FC MED", "FC MAX", "%FCMAX", "EST")):
+        draw_text(m, -2.58 + i * 1.36, -0.80, 0.05, h * 0.76, lab, DIM, light=0.9)
+    for i, lab in enumerate(("W MED", "W MAX", "FTP", "EN ZONA")):
+        draw_text(m, -2.58 + i * 1.36, -1.42, 0.05, h * 0.76, lab, DIM, light=0.9)
+    for z, lab in enumerate(("ZONA FC", "BANDA W")):
+        draw_text(m, -1.35, -2.30 - z * 0.32, 0.05, 0.15, lab, DIM, light=0.9, align="r")
+    draw_text(m, 1.42, -2.24, 0.05, 0.17 * 0.78, "W/KG", DIM, light=0.9)
+    draw_text(m, -text_w("FC", 0.17) / 2, 1.62 + 0.26, 0.05, 0.17, "FC", INK, light=0.9)
+
+
 def _led_bar(m, hr, lo, hi, zc):
-    """Columna LED de FC entre los dos diales grandes: encendida hasta el valor."""
-    x, z0, z1, n = 0.0, -0.44, 1.62, 20
+    """Columna LED de FC entre los dos diales grandes: encendida hasta el valor.
+
+    Se dibuja en espacio panel: y = alto, z = hacia el piloto.
+    """
+    x, y0, y1, n = 0.0, -0.44, 1.62, 20
     frac = max(0.0, min(1.0, (hr - lo) / max(1e-6, hi - lo))) if hr else 0.0
-    m.box(x, 0.08, (z0 + z1) / 2, 0.46, 0.10, z1 - z0 + 0.30, (0.17, 0.19, 0.24))
+    m.box(x, (y0 + y1) / 2, -0.08, 0.46, y1 - y0 + 0.30, 0.10, (0.17, 0.19, 0.24))
     for i in range(n):
         f = i / (n - 1)
         lit = f <= frac
         col = (0.98, 0.28, 0.28) if (lit and f > 0.88) else (zc if lit else UNLIT)
-        m.box(x, -0.02, z0 + (z1 - z0) * f, 0.32, 0.10, (z1 - z0) / n * 0.64,
+        m.box(x, y0 + (y1 - y0) * f, 0.02, 0.32, (y1 - y0) / n * 0.64, 0.10,
               col, light=0.95 if lit else 0.3)
-    draw_text(m, -text_w("FC", 0.17) / 2, 0.0, z1 + 0.26, 0.17, "FC", INK, light=0.9)
 
 
 def _lamps(m, snap):
-    """Pilotos de zona FC y de banda de potencia + W/kg, todo centrado en el hueco."""
+    """Pilotos de zona FC y de banda de potencia + valor W/kg (etiquetas van fijas)."""
     zs = snap.get("zcolors") or ZCOLORS_FALLBACK
     ws = snap.get("wcolors") or ZCOLORS_FALLBACK
     zi, wi = int(snap.get("zone_idx") or 0), int(snap.get("wband") or 0)
-    for z, (cols, idx, lab) in enumerate(((zs, zi, "ZONA FC"), (ws, wi, "BANDA W"))):
-        zz = -2.30 - z * 0.32
-        draw_text(m, -1.35, 0.0, zz, 0.15, lab, DIM, light=0.9, align="r")
+    for z, (cols, idx) in enumerate(((zs, zi), (ws, wi))):
+        yy = -2.30 - z * 0.32
         for i, chex in enumerate(cols):
             lit = i == idx
-            m.box(-1.05 + i * 0.44, -0.02, zz, 0.32, 0.12, 0.17,
+            m.box(-1.05 + i * 0.44, yy, 0.02, 0.32, 0.17, 0.12,
                   _hex(chex) if lit else UNLIT, light=0.95 if lit else 0.35)
     h = 0.17
-    draw_text(m, 1.42, 0.0, -2.24, h * 0.78, "W/KG", DIM, light=0.9)
-    draw_digits(m, 1.42, 0.0, -2.52, h * 0.92, "%3.1f" % float(snap.get("wkg") or 0),
+    draw_digits(m, 1.42, -2.52, 0.05, h * 0.92, "%3.1f" % float(snap.get("wkg") or 0),
                 WHITE, light=0.9)
 
 
 def _strips(m, snap):
-    """Tiras digitales: arriba tiempo/kcal/dist/atleta, al centro promedios, al pie estado.
+    """Valores de las tiras digitales (las etiquetas viven en la capa estatica).
 
-    Todo lo del pie queda centrado en el hueco entre el dial de vel y el de cad, para
-    que ninguna etiqueta se meta debajo de los diales chicos.
+    En espacio panel (y = alto, z = hacia el piloto) y centrados en el hueco entre los
+    diales chicos, para que nada se meta debajo de vel o cadencia.
     """
     h = 0.18
-    for i, (lab, val, col) in enumerate((
-            ("TIEMPO", _clock(snap.get("elapsed_s") or 0), WHITE),
-            ("KCAL", "%4.0f" % float(snap.get("total_kcal") or 0), GREEN),
-            ("DIST KM", "%04.1f" % float(snap.get("dist_km") or 0), CYAN))):
+    for i, (val, col) in enumerate((
+            (_clock(snap.get("elapsed_s") or 0), WHITE),
+            ("%4.0f" % float(snap.get("total_kcal") or 0), GREEN),
+            ("%04.1f" % float(snap.get("dist_km") or 0), CYAN))):
         x = -3.62 + i * 1.78
-        draw_text(m, x, 0.0, 2.46, h * 0.70, lab, DIM, light=0.9)
-        draw_digits(m, x, 0.0, 2.18, h * 0.92, val, col, light=0.95)
+        draw_digits(m, x, 2.18, 0.05, h * 0.92, val, col, light=0.95)
     atleta = "%dA %dKG %s" % (int(snap.get("age") or 0), round(float(snap.get("weight") or 0)),
                               (snap.get("sex") or "M"))
-    draw_text(m, 1.72, 0.0, 2.46, h * 0.70, "ATLETA", DIM, light=0.9)
-    draw_text(m, 1.72, 0.0, 2.16, h * 0.72, atleta, WHITE, light=0.9)
+    draw_text(m, 1.72, 2.16, 0.05, h * 0.72, atleta, WHITE, light=0.9)
 
-    # 4 columnas centradas en el hueco entre los diales chicos (nada pisa vel ni cad)
-    for i, (lab, val, col) in enumerate((
-            ("FC MED", "%3d" % round(float(snap.get("avg_hr") or 0)), AMBER),
-            ("FC MAX", "%3d" % int(snap.get("max_hr") or 0), RED),
-            ("%FCMAX", "%2.0f" % float(snap.get("pct_max") or 0), WHITE),
-            ("EST", "%3d" % int(snap.get("hrmax") or 0), INK))):
-        x = -2.58 + i * 1.36
-        draw_text(m, x, 0.0, -0.80, h * 0.76, lab, DIM, light=0.9)
-        draw_digits(m, x, 0.0, -1.06, h * 0.92, val, col, light=0.9)
-    for i, (lab, val, col) in enumerate((
-            ("W MED", "%3d" % round(float(snap.get("avg_watts") or 0)), AMBER),
-            ("W MAX", "%3d" % int(snap.get("max_watts") or 0), RED),
-            ("FTP", "%3d" % int(snap.get("ftp") or 0), GREEN),
-            ("EN ZONA", _clock(snap.get("zone_secs") or 0), WHITE))):
-        x = -2.58 + i * 1.36
-        draw_text(m, x, 0.0, -1.42, h * 0.76, lab, DIM, light=0.9)
-        draw_digits(m, x, 0.0, -1.68, h * 0.92, val, col, light=0.9)
+    for i, (val, col) in enumerate((
+            ("%3d" % round(float(snap.get("avg_hr") or 0)), AMBER),
+            ("%3d" % int(snap.get("max_hr") or 0), RED),
+            ("%2.0f" % float(snap.get("pct_max") or 0), WHITE),
+            ("%3d" % int(snap.get("hrmax") or 0), INK))):
+        draw_digits(m, -2.58 + i * 1.36, -1.06, 0.05, h * 0.92, val, col, light=0.9)
+    for i, (val, col) in enumerate((
+            ("%3d" % round(float(snap.get("avg_watts") or 0)), AMBER),
+            ("%3d" % int(snap.get("max_watts") or 0), RED),
+            ("%3d" % int(snap.get("ftp") or 0), GREEN),
+            (_clock(snap.get("zone_secs") or 0), WHITE))):
+        draw_digits(m, -2.58 + i * 1.36, -1.68, 0.05, h * 0.92, val, col, light=0.9)
 
-    estado = "Z%d %s · %d MUESTRAS · %2.1f KCAL/MIN" % (
+    estado = "Z%d %s  %d MUESTRAS  %2.1f KCAL/MIN" % (
         int(snap.get("zone_idx") or 0),
         (snap.get("zone_name") or "")[:8].upper(),
         int(snap.get("n") or 0), float(snap.get("kcal_min") or 0))
-    draw_text(m, 0.0, 0.0, -2.96, 0.105, estado, INK, light=0.9, align="c")
+    draw_text(m, 0.0, -2.96, 0.05, 0.105, estado, INK, light=0.9, align="c")
 
 
 def _clock(secs) -> str:

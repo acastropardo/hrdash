@@ -72,6 +72,9 @@ dashboard le manda el estado una vez por segundo por `stdin`; ella anima localme
 
 - `3` es un **toggle global**: la escena que se ve es siempre la de la vista activa, y
   el modo **persiste** al cambiar de vista con `h`/`w`/`g`/`p` o `← →`.
+- La ventana abre a **1920×1080 píxeles reales**: GLFW mide en puntos, así que se divide
+  por el `content scale` del monitor (960×540 puntos en una Retina ×2) y se elige el
+  monitor cuya área útil lo aloja; si ninguno puede, se usa el 16:9 más grande que quepa.
 - Escenas: **FC** → barras 3D del historial coloreadas por zona + barra de la FC actual;
   **watts** → cajas 3D por banda de %FTP (altura = kJ); **tablero** → **cluster completo de
   los 4 diales** (ver abajo); **pista** → velódromo con peralte, meta y estela.
