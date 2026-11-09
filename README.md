@@ -12,6 +12,8 @@ Polar H9/H10, Garmin HRM, Coospo…) y opcionalmente un rodillo (Tacx u otro) v�
 - FC **max / media / min**, W max/media, **W/kg**, vel/cad, **distancia**
 - **vista tablero** (`g`): gauges estilo cuentavueltas dibujados con braille — arco de
   zonas FC/%FTP, aguja con inercia a 10 fps, marcas de media y números gigantes
+- **ventana 3D** (`3`): escena OpenGL nativa de la vista activa (barras de FC por zona,
+  cajas de potencia, dial con aguja y velódromo con peralte) en un proceso aparte
 - **gasto calórico** en vivo (fórmula Keytel) según edad, sexo y peso
 - **tiempo y kcal por zona** (Z1–Z5)
 - al salir graba la sesión en **FIT compatible con Garmin Connect** (records con FC,
@@ -25,6 +27,7 @@ Corre en **macOS** (CoreBluetooth) y **Linux** (BlueZ) con el mismo código.
 cd fc
 uv venv --python 3.12 .venv        # o: python3.12 -m venv .venv
 uv pip install -p .venv -e .       # o: .venv/bin/pip install -e .
+uv pip install -p .venv -e ".[gl]" # extras para la ventana 3D (moderngl, glfw, numpy)
 source .venv/bin/activate          # o alias: alias hrdash="$HOME/Documents/fc/.venv/bin/hrdash"
 ```
 
@@ -54,7 +57,27 @@ Teclas dentro del dashboard:
 | `w` | vista principal del gráfico: **WATTS** (la tira chica muestra siempre la métrica opuesta) |
 | `g` | **vista tablero**: gauges tipo tacómetro (FC grande + watts, vel, cad y panel digital) |
 | `p` | **vista pista**: circuito tipo velódromo con la bici en la vuelta en curso |
+| `3` | abre/cierra la **ventana OpenGL nativa** con la escena 3D de la vista activa |
+| `←` / `→` | navegar entre vistas: **FC → watts → tablero → pista** (la ayuda marca la activa) |
 | `[` / `]` | en la vista pista: recorre los largos de vuelta (1, 2, 3, **5**, 10, 20 km) |
+
+### Ventana 3D (`3`)
+
+La TUI y el muestreo siguen intactos; el 3D es una **ventana OpenGL nativa aparte**
+(`src/hrdash/glview.py`), porque Terminal.app no soporta ningún protocolo gráfico y por
+lo tanto no puede mostrar una imagen dentro del panel. La ventana corre en su propio
+proceso (GLFW + moderngl: cámara en perspectiva, z-buffer y lighting de Lambert) y el
+dashboard le manda el estado una vez por segundo por `stdin`; ella anima localmente a
+~50 fps (aguja con inercia, bici recorriendo la vuelta, cámara orbital).
+
+- `3` es un **toggle global**: la escena que se ve es siempre la de la vista activa, y
+  el modo **persiste** al cambiar de vista con `h`/`w`/`g`/`p` o `← →`.
+- Escenas: **FC** → barras 3D del historial coloreadas por zona + barra de la FC actual;
+  **watts** → cajas 3D por banda de %FTP (altura = kJ); **tablero** → dial 3D con aro de
+  balizas por zona y aguja; **pista** → velódromo con peralte, meta cuadriculada, estela
+  y marcador.
+- Si la ventana se cierra o falla (falta GPU/dependencias), el dashboard **vuelve solo
+  a 2D** y sigue grabando; el aviso aparece en la línea de ayuda.
 
 ### Vista pista (`p`)
 

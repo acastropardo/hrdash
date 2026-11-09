@@ -9,6 +9,9 @@ Vistas: h = barras de FC arriba, w = barras de watts, g = tablero de gauges
 (diales braille con agujas animadas que reemplaza tiles/graficos/zonas),
 p = pista de carreras: ovalo en braille con la bici en la vuelta de `lap_m` y
 tablero de vueltas. El marcador se mueve a 10 fps con su propio timer.
+Se navega entre vistas con ← → (en la pista, [ ] cambia el largo de vuelta). La tecla
+`3` abre/cierra la **ventana OpenGL nativa** (`glview`) con la escena 3D de la vista
+activa: el modo es global y persiste al cambiar de vista, la TUI sigue en 2D.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from rich.text import Text
 from .bigfont import render_big, render_heart
 from .config import Config, save_config
 from .gauges import Gauge
+from .glview import GLHost
 from .history import Session
 from .laps import LapTracker
 from .track import Track
@@ -35,10 +39,29 @@ from .zones import zone_for_hr, power_band, W_COLORS, POWER_BANDS
 SPD_COLOR = "#22d3ee"
 CAD_COLOR = "#a78bfa"
 GLYPH8 = " ▁▂▃▅▆▇█"
-HINTS = (" q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · "
-         "h: FC · w: watts · g: tablero · p: pista · [ ]: largo de vuelta")
+# orden de las vistas para navegar con las flechas
+VIEWS = ["hr", "watts", "gauge", "pista"]
+VIEW_KEYS = {"hr": "h", "watts": "w", "gauge": "g", "pista": "p"}
+VIEW_NAMES = {"hr": "FC", "watts": "watts", "gauge": "tablero", "pista": "pista"}
 # presets del largo de vuelta para la vista pista (se recorren con [ y ])
 LAP_PRESETS = [1000, 2000, 3000, 5000, 10000, 20000]
+
+
+def hints_text(view: str, note: str = "") -> Text:
+    """Linea de ayuda: la vista activa va en negrita; `note` avisa de la ventana 3D."""
+    t = Text(" q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · ")
+    t.append("← →: ", style="#6b7280")
+    for i, v in enumerate(VIEWS):
+        if i:
+            t.append(" ", style="#6b7280")
+        if v == view:
+            t.append(f"{VIEW_KEYS[v]} {VIEW_NAMES[v]}", style="bold #f8fafc")
+        else:
+            t.append(VIEW_KEYS[v], style="#9ca3af")
+    t.append(" · 3: ventana 3D · [ ]: largo vuelta", style="#6b7280")
+    if note:
+        t.append(f" · {note}", style="bold #f97316")
+    return t
 
 
 def _round_up(v: float, m: int) -> float:
@@ -125,6 +148,9 @@ class HRDash(App):
         ("w", "view_w", "Vista watts"),
         ("g", "view_gauge", "Tablero"),
         ("p", "view_pista", "Vista pista"),
+        ("3", "toggle_gl", "Ventana 3D on/off"),
+        ("left", "cycle_view(-1)", "Vista anterior"),
+        ("right", "cycle_view(1)", "Vista siguiente"),
         ("[", "cycle_lap(-1)", "Vuelta mas corta"),
         ("]", "cycle_lap(1)", "Vuelta mas larga"),
     ]
@@ -183,7 +209,10 @@ class HRDash(App):
         self._ui_error = ""
         self._err_round = False
         self._pulse = 0
-        self.view = "hr"          # "hr" | "watts" | "gauge": vista principal
+        self.view = "hr"          # "hr" | "watts" | "gauge" | "pista": vista principal
+        self.gl = False           # True: ventana OpenGL 3D abierta (toggle global con `3`)
+        self._glhost: GLHost | None = None
+        self._gl_msg = ""         # aviso de la ventana 3D (cerrada / sin dependencias)
         self._beat_t0 = time.time()
         self._beat_period = 1.0
         self._heart_lvl = -1      # ultimo nivel dibujado (evita redibujos)
@@ -235,7 +264,7 @@ class HRDash(App):
         self.set_interval(0.1, self._tick_heart)   # corazon a 10 fps, independiente del dato
         self.set_interval(0.1, self._tick_gauges)  # agujas a 10 fps (solo en vista tablero)
         self.set_interval(0.1, self._tick_pista)   # marcador de la bici a 10 fps
-        self.query_one("#hints", Static).update(HINTS)
+        self.query_one("#hints", Static).update(hints_text(self.view))
         self.refresh_all()
 
     async def _run(self, source, label: str) -> None:
@@ -268,6 +297,13 @@ class HRDash(App):
 
     def action_view_pista(self) -> None:
         self._set_view("pista")
+
+    def action_cycle_view(self, delta: int) -> None:
+        """Recorre las vistas con ← →: FC -> watts -> tablero -> pista."""
+        if len(self.screen_stack) > 1:
+            return          # hay modal abierto: ahi las flechas mueven el cursor
+        i = VIEWS.index(self.view) if self.view in VIEWS else 0
+        self._set_view(VIEWS[(i + delta) % len(VIEWS)])
 
     def action_cycle_lap(self, delta: int) -> None:
         """Recorre los presets de largo de vuelta (1, 2, 3, 5, 10, 20 km)."""
@@ -303,6 +339,9 @@ class HRDash(App):
             self.screen.add_class("pista")
         self._tick_gauges()      # primera pincelada inmediata (o vuelve el grafico)
         self._tick_pista()
+        if not self._ui_error:
+            self._hints()
+        self._push_gl()          # la ventana muestra la escena de la vista recién activada
         self.refresh_all()
 
     def action_open_config(self) -> None:
@@ -314,6 +353,7 @@ class HRDash(App):
             self.refresh_all()
 
     def action_quit_session(self) -> None:
+        self._kill_gl()                  # la ventana 3D se va con el dashboard
         try:
             name = getattr(self.hr, "name", "HRDash")
             if getattr(self.tr, "name", None):
@@ -323,6 +363,83 @@ class HRDash(App):
             self.export_result = {"fit_error": str(exc)}
         self._stop.set()
         self.exit()
+
+    # ---- ventana 3D (OpenGL nativo, en proceso aparte) ----
+    def action_toggle_gl(self) -> None:
+        """Abre o cierra la ventana OpenGL con la escena 3D de la vista activa."""
+        if self.gl and self._glhost is not None:
+            self._gl_msg = "ventana 3D cerrada"
+            self._kill_gl()
+        else:
+            host = self._glhost or GLHost()
+            if host.start():
+                self._glhost = host
+                self.gl = True
+                self._gl_msg = ""
+                self._push_gl()
+            else:
+                self._glhost = None
+                self._gl_msg = host.error or "3D no disponible: pip install -e '.[gl]'"
+        self._hints()
+
+    def _gl_snapshot(self) -> dict:
+        """Estado de la sesion, listo para la tuberia del proceso de la ventana."""
+        s, cfg, tr = self.session, self.config, self.tr
+        hr = int(s.current_hr or (getattr(self.hr, "latest_hr", None) or 0))
+        w = int(s.current_watts or ((getattr(tr, "watts", None) or 0) if tr else 0))
+        spd = float(s.current_speed or ((getattr(tr, "speed_kmh", None) or 0.0) if tr else 0.0))
+        zone = zone_for_hr(hr or 60, cfg.zones(), cfg.computed_hrmax())
+        _lo, _hi, segs = self._hr_scale()
+        return {
+            "view": self.view,
+            "hr": hr, "watts": w, "speed": spd,
+            "hrmax": int(cfg.computed_hrmax()), "ftp": int(cfg.ftp),
+            "zone_color": zone.color,
+            "wzone_color": W_COLORS[power_band(w, cfg.ftp)],
+            "samples": [(x.hr, x.watts or 0, x.zone_idx) for x in s.window(70)],
+            "pzone_kj": [float(x) for x in s.pzone_kj],
+            "zcolors": [z.color for z in cfg.zones()],
+            "wcolors": list(W_COLORS),
+            "hr_segs": segs,
+            "zone_pcts": [(z.low_pct, z.high_pct) for z in cfg.zones()],
+            "lap_m": int(self.laps.lap_m), "lap_frac": float(self.laps.frac),
+        }
+
+    def _push_gl(self) -> None:
+        if not (self.gl and self._glhost is not None):
+            return
+        try:
+            self._glhost.push(self._gl_snapshot())
+        except Exception as exc:  # noqa: BLE001 - la ventana nunca interrumpe el muestreo
+            self._gl_msg = f"3D: {type(exc).__name__}"[:60]
+            self._kill_gl()
+            self._hints()
+
+    def _check_gl(self) -> None:
+        """Si la ventana murio (cierre del usuario o fallo GL), se vuelve a 2D solos."""
+        if not (self.gl and self._glhost is not None):
+            return
+        err = self._glhost.poll_error()
+        if err:
+            self._gl_msg = err
+            self._kill_gl()
+            self._hints()
+        elif not self._glhost.alive():
+            self._gl_msg = "ventana 3D cerrada"
+            self._kill_gl()
+            self._hints()
+
+    def _kill_gl(self) -> None:
+        self.gl = False
+        if self._glhost is not None:
+            self._glhost.stop()
+            self._glhost = None
+
+    def _hints(self) -> None:
+        try:
+            self.query_one("#hints", Static).update(hints_text(self.view, self._gl_msg))
+        except Exception:  # noqa: BLE001 - la linea de ayuda no debe tumbar la app
+            pass
 
     # ---- ciclo de refresco (1 Hz) ----
     def tick(self) -> None:
@@ -399,6 +516,7 @@ class HRDash(App):
     def refresh_all(self) -> None:
         s, cfg = self.session, self.config
         self._err_round = False
+        self._check_gl()
         hr = s.current_hr if s.n else (getattr(self.hr, "latest_hr", None) or 0)
         zone = zone_for_hr(hr or 60, cfg.zones(), cfg.computed_hrmax())
         self._safe_draw(self._draw_status, zone)
@@ -413,14 +531,12 @@ class HRDash(App):
             self._safe_draw(self._draw_stats)
             self._safe_draw(self._draw_zones)
             self._safe_draw(self._draw_zones_w)
+        self._push_gl()                  # 1 Hz: la ventana 3D recibe el estado nuevo
         if self._err_round:
             return                       # _show_error ya pinto la alerta
         if self._ui_error:               # ronda limpia tras un error: restaurar ayuda
             self._ui_error = ""
-            try:
-                self.query_one("#hints", Static).update(HINTS)
-            except Exception:  # noqa: BLE001
-                pass
+            self._hints()
 
     def _draw_status(self, zone) -> None:
         src = self.hr

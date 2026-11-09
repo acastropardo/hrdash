@@ -10,6 +10,9 @@ dependencies = [
     "garmin-fit-sdk>=0.6.10",
 ]
 
+[project.optional-dependencies]
+gl = ["moderngl>=5.10", "glfw>=2.6", "numpy>=1.26"]
+
 [project.scripts]
 hrdash = "hrdash.cli:main"
 
