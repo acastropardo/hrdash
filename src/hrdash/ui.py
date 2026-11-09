@@ -49,7 +49,7 @@ LAP_PRESETS = [1000, 2000, 3000, 5000, 10000, 20000]
 
 def hints_text(view: str, note: str = "") -> Text:
     """Linea de ayuda: la vista activa va en negrita; `note` avisa de la ventana 3D."""
-    t = Text(" q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · ")
+    t = Text(" q: salir y grabar FIT+CSV · x: reiniciar · s: reconectar · c: config · ")
     t.append("← →: ", style="#6b7280")
     for i, v in enumerate(VIEWS):
         if i:
@@ -141,7 +141,7 @@ class HRDash(App):
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
         ("q", "quit_session", "Salir y grabar"),
-        ("r", "reset_session", "Reiniciar"),
+        ("x", "reset_session", "Reiniciar"),
         ("s", "reconnect", "Reconectar"),
         ("c", "open_config", "Config"),
         ("h", "view_hr", "Vista FC"),

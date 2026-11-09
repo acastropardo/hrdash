@@ -318,7 +318,11 @@ def oval(cx, cy, steps=30):
 
 
 def scene_pista(snap, anim, aspect=1.6):
-    """Velodromo con peralte, meta cuadriculada, estela y marcador de la bici."""
+    """Velodromo con peralte, meta cuadriculada, estela y marcador de la bici.
+
+    Cámara **chase** (1 persona, estilo juego de carreras): detras de la bici, mirando
+    hacia adelante, con la distancia configurable por el piloto.
+    """
     m = Mesh()
     cx, cy = 2.15, 1.30
     pts = oval(cx, cy, 26)
@@ -342,11 +346,22 @@ def scene_pista(snap, anim, aspect=1.6):
     for k in range(9, 0, -1):
         f = (anim["frac"] - k * 0.007) % 1.0
         x, y = _at(pts, f)
-        m.box(x, y, 0.09 + k * 0.004, 0.12, 0.12, 0.14,
-              tuple(c * (1.0 - k / 14.0) for c in col))
-    x, y, tx, ty = pts[min(n, max(0, int(anim["frac"] * n)))]
-    m.box(x, y, 0.34, 0.40, 0.22, 0.34, col, yaw=math.atan2(ty, tx))
-    return [("frame", m)], orbit(anim["t"], 5.2, 3.4, 0.16, center=(0.0, 0.0, 0.25), aspect=aspect)
+        # streak fino sobre el asfalto (no columna: desde la camara tapa el cuadro)
+        m.box(x, y, 0.025, 0.14, 0.14, 0.03, tuple(c * (1.0 - k / 14.0) for c in col))
+    idx = min(n, max(0, int(anim["frac"] * n)))
+    bx, by, btx, bty = pts[idx]
+    bl = math.hypot(btx, bty) or 1.0
+    fx, fy = btx / bl, bty / bl
+    yaw = math.atan2(bty, btx)
+    # la bici: bicho + bulto del ciclista, para que se lea como un rider
+    m.box(bx, by, 0.14, 0.50, 0.22, 0.20, col, yaw=yaw, light=0.4)
+    m.box(bx + fx * 0.10, by + fy * 0.10, 0.34, 0.20, 0.16, 0.22, (0.85, 0.88, 0.92),
+          yaw=yaw, light=0.3)
+    # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici
+    dist = 2.4
+    eye = (bx - fx * dist, by - fy * dist, 0.55)
+    center = (bx + fx * 1.6, by + fy * 1.6, 0.22)
+    return [("frame", m)], (eye, center, (0.0, 0.0, 1.0), 0.62)
 
 
 def _at(pts, f):
