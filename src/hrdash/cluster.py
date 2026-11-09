@@ -224,7 +224,7 @@ def dial_static(m, r, lo, hi, segs, major, minor, label, unit, big=True):
                           math.sin(a) * rr - r * 0.06, 0.06, r * 0.13, s, INK, light=0.9)
             v += minor
     # unidad y nombre en el hueco de las 6 en punto (ahi no llegan palitos ni numeros)
-    draw_text(m, -text_w(unit, r * 0.19) / 2, -r * 0.60, 0.06, r * 0.19, unit,
+    draw_text(m, -text_w(unit, r * 0.19) / 2, -r * 0.56, 0.06, r * 0.19, unit,
               INK, light=0.9)
     if big:
         draw_text(m, -text_w(label, r * 0.13) / 2, -r * 0.80, 0.06, r * 0.13, label,
@@ -266,17 +266,21 @@ def dial_frame(m, r, value, lo, hi, major, minor, redline, col_now, alarm):
 
 
 def dial_values(m, r, digits, dh, alarm, avg=None):
-    """Capa por snapshot: lectura digital en las 6 en punto + media (cambia a 1 Hz)."""
+    """Capa por snapshot: lectura digital encima del eje central (cambia a 1 Hz).
+
+    Usa el mismo cuerpo de letra que los numeros grises de la escala (r*0.13) para que
+    la cara del dial respire; la unidad y el nombre del dial van debajo del cubo.
+    """
     h = r * dh
     total = digits_w(digits, h)
-    draw_digits(m, -total / 2, -r * 0.10, 0.22, h, digits, RED if alarm else AMBER, light=0.95)
+    draw_digits(m, -total / 2, r * 0.22, 0.22, h, digits, RED if alarm else AMBER, light=0.95)
     if avg is not None:
         s = "%3d" % round(avg) if avg >= 10 else "%3.1f" % avg
         hh = r * 0.13
         tot = digits_w(s, hh)
-        draw_text(m, -text_w("MED", hh) - tot / 2 - hh * 0.6, -r * 0.80, 0.06, hh, "MED",
+        draw_text(m, -text_w("MED", hh) - tot / 2 - hh * 0.6, -r * 0.78, 0.06, hh, "MED",
                   DIM, light=0.85)
-        draw_digits(m, -tot / 2, -r * 0.80, 0.06, hh, s, (0.75, 0.80, 0.86), light=0.85)
+        draw_digits(m, -tot / 2, -r * 0.78, 0.06, hh, s, (0.75, 0.80, 0.86), light=0.85)
 
 
 # ---------------------------------------------------------------- cluster
@@ -342,7 +346,7 @@ class Cluster:
         for which, cx, cz, r, _label, _unit in DIALS:
             one = Mesh()
             one.panel(cx, cz)
-            dial_values(one, r, _digits_for(which, vals[which]), 0.24,
+            dial_values(one, r, _digits_for(which, vals[which]), 0.13,
                         alarm and which == "hr", avg=avgs.get(which))
             m.merge(one)
         zc = _hex(snap.get("zone_color") or "#ef4444")
