@@ -67,7 +67,7 @@ FONT = {
     ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
     "-": ("00000", "00000", "00000", "11111", "00000", "00000", "00000"),
     "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
-    "%": ("11001", "11010", "00100", "00100", "01011", "10011", "00000"),
+    "%": ("11010", "11010", "00100", "01001", "01011", "10011", "00000"),
     "(": ("00110", "01000", "10000", "10000", "10000", "01000", "00110"),
     ")": ("01100", "00010", "00001", "00001", "00001", "00010", "01100"),
     " ": ("00000", "00000", "00000", "00000", "00000", "00000", "00000"),
@@ -78,7 +78,9 @@ SEG = {"0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc",
        "5": "acdfg", "6": "acdefg", "7": "abc", "8": "abcdefg", "9": "abcdfg",
        "-": "g", " ": ""}
 
-INK = (0.60, 0.66, 0.72)          # texto secundario
+INK = (0.78, 0.83, 0.88)          # texto secundario (mas claro: se leia como humo)
+DIM = (0.46, 0.52, 0.58)          # etiquetas de las tiras
+UNLIT = (0.32, 0.36, 0.42)        # pilotos y segmentos apagados: grises con presencia
 AMBER = (0.99, 0.83, 0.38)        # promedios
 GREEN = (0.45, 0.90, 0.55)        # kcal / FTP
 CYAN = (0.36, 0.85, 0.93)         # distancia / velocidad
@@ -87,7 +89,21 @@ WHITE = (0.90, 0.93, 0.97)
 
 
 def _charw(h: float) -> float:
-    return h * (5.0 / 7.0 + 0.30)
+    return h * (5.0 / 7.0 + 0.42)     # avance holgado: con trazos gordos las letras se pegan
+
+
+def digits_w(s: str, h: float) -> float:
+    """Ancho real de un valor en 7 segmentos (punto y dos puntos avanzan menos)."""
+    step = h * 0.86
+    tot = 0.0
+    for i, ch in enumerate(s):
+        if ch == ".":
+            tot += step * 0.45
+        elif ch == ":":
+            tot += step * 0.55
+        else:
+            tot += step
+    return tot - (step - h * 0.58) if s else 0.0
 
 
 def text_w(s: str, h: float) -> float:
@@ -96,7 +112,7 @@ def text_w(s: str, h: float) -> float:
 
 
 def draw_text(mesh, x, y, z, h, s, col, light=0.0, align="l", depth=0.03) -> None:
-    """Escribe `s` en fuente pixel 5x7, fusionando la corrida de cada fila en una caja."""
+    """Escribe `s` en fuente pixel 5x7 con trazos gordos y alivio poco profundo."""
     if align == "c":
         x -= text_w(s, h) / 2.0
     elif align == "r":
@@ -119,20 +135,25 @@ def draw_text(mesh, x, y, z, h, s, col, light=0.0, align="l", depth=0.03) -> Non
                 while c + run < 5 and bits[c + run] == "1":
                     run += 1
                 mesh.box(gx + (c + run / 2.0 - 0.5) * px, y + (3.0 - row) * px, z,
-                         run * px * 0.9, px * 0.9, depth, col, light=light)
+                         run * px + px * 0.30, px * 1.30, depth, col, light=light)
                 c += run
 
 
 def draw_digits(mesh, x, y, z, h, s, col, light=0.9) -> None:
-    """Valor en digitos de 7 segmentos (7 cajas por digito, como un cuadro de auto)."""
+    """Valor en digitos de 7 segmentos; el punto y los dos puntos avanzan medio ancho."""
     w = h * 0.58
     t = h * 0.14
     step = w + h * 0.28
-    for i, ch in enumerate(s):
-        gx = x + i * step
-        if ch == ":":                                # los dos puntos van como dos puntos
-            mesh.box(gx + w / 2, y + h * 0.17, z, t, t, t, col, light=light)
-            mesh.box(gx + w / 2, y - h * 0.17, z, t, t, t, col, light=light)
+    gx = x
+    for ch in s:
+        if ch == ".":                                # punto: mitad de avance
+            mesh.box(gx + t / 2, y - h / 2, z, t, t, t, col, light=light)
+            gx += step * 0.45
+            continue
+        if ch == ":":                                # dos puntos: dos puntos suspensos
+            mesh.box(gx + t / 2, y + h * 0.18, z, t, t, t, col, light=light)
+            mesh.box(gx + t / 2, y - h * 0.18, z, t, t, t, col, light=light)
+            gx += step * 0.55
             continue
         on = SEG.get(ch, "")
         if "a" in on:
@@ -149,6 +170,7 @@ def draw_digits(mesh, x, y, z, h, s, col, light=0.9) -> None:
             mesh.box(gx, y - h / 4, z, t, h / 2, t, col, light=light)
         if "c" in on:
             mesh.box(gx + w, y - h / 4, z, t, h / 2, t, col, light=light)
+        gx += step
 
 
 # ---------------------------------------------------------------- dial
@@ -199,14 +221,14 @@ def dial_static(m, r, lo, hi, segs, major, minor, label, unit, big=True):
                 a = _dial(frac)
                 s = str(int(round(v)))
                 draw_text(m, math.cos(a) * rr - text_w(s, r * 0.12) / 2,
-                          math.sin(a) * rr - r * 0.06, 0.05, r * 0.12, s, INK, light=0.45)
+                          math.sin(a) * rr - r * 0.06, 0.06, r * 0.13, s, INK, light=0.9)
             v += minor
     # unidad y nombre en el hueco de las 6 en punto (ahi no llegan palitos ni numeros)
-    draw_text(m, -text_w(unit, r * 0.17) / 2, -r * 0.62, 0.05, r * 0.17, unit,
-              (0.58, 0.64, 0.70), light=0.5)
+    draw_text(m, -text_w(unit, r * 0.19) / 2, -r * 0.60, 0.06, r * 0.19, unit,
+              INK, light=0.9)
     if big:
-        draw_text(m, -text_w(label, r * 0.12) / 2, -r * 0.80, 0.05, r * 0.12, label,
-                  INK, light=0.45)
+        draw_text(m, -text_w(label, r * 0.13) / 2, -r * 0.80, 0.06, r * 0.13, label,
+                  DIM, light=0.8)
 
 
 def dial_frame(m, r, value, lo, hi, major, minor, redline, col_now, alarm):
@@ -246,16 +268,15 @@ def dial_frame(m, r, value, lo, hi, major, minor, redline, col_now, alarm):
 def dial_values(m, r, digits, dh, alarm, avg=None):
     """Capa por snapshot: lectura digital en las 6 en punto + media (cambia a 1 Hz)."""
     h = r * dh
-    step = h * 0.86                                # ancho por digito en 7-seg
-    total = (len(digits) - 1) * step + h * 0.58
+    total = digits_w(digits, h)
     draw_digits(m, -total / 2, -r * 0.10, 0.22, h, digits, RED if alarm else AMBER, light=0.95)
     if avg is not None:
-        s = "%3d" % round(avg) if avg >= 10 else "%04.1f" % avg
+        s = "%3d" % round(avg) if avg >= 10 else "%3.1f" % avg
         hh = r * 0.13
-        tot = (len(s) - 1) * hh * 0.86 + hh * 0.58
-        draw_text(m, -text_w("MED", hh) - tot / 2 - hh, -r * 0.80, 0.06, hh, "MED",
-                  (0.52, 0.58, 0.64), light=0.4)
-        draw_digits(m, -tot / 2, -r * 0.80, 0.06, hh, s, (0.75, 0.80, 0.86), light=0.6)
+        tot = digits_w(s, hh)
+        draw_text(m, -text_w("MED", hh) - tot / 2 - hh * 0.6, -r * 0.80, 0.06, hh, "MED",
+                  DIM, light=0.85)
+        draw_digits(m, -tot / 2, -r * 0.80, 0.06, hh, s, (0.75, 0.80, 0.86), light=0.85)
 
 
 # ---------------------------------------------------------------- cluster
@@ -391,7 +412,7 @@ def _digits_for(which, v):
     if which in ("hr", "w"):
         return "%3d" % round(v) if v else "--"
     if which == "v":
-        return "%04.1f" % v if v else "--.-"
+        return "%3.1f" % v if v else "-.-"
     return "%3d" % round(v) if v else "--"
 
 
@@ -421,67 +442,76 @@ def _led_bar(m, hr, lo, hi, zc):
     """Columna LED de FC entre los dos diales grandes: encendida hasta el valor."""
     x, z0, z1, n = 0.0, -0.44, 1.62, 20
     frac = max(0.0, min(1.0, (hr - lo) / max(1e-6, hi - lo))) if hr else 0.0
-    m.box(x, 0.08, (z0 + z1) / 2, 0.42, 0.10, z1 - z0 + 0.30, (0.12, 0.14, 0.18))
+    m.box(x, 0.08, (z0 + z1) / 2, 0.46, 0.10, z1 - z0 + 0.30, (0.17, 0.19, 0.24))
     for i in range(n):
         f = i / (n - 1)
         lit = f <= frac
-        col = (0.98, 0.28, 0.28) if (lit and f > 0.88) else (zc if lit else (0.22, 0.25, 0.30))
-        m.box(x, -0.02, z0 + (z1 - z0) * f, 0.30, 0.10, (z1 - z0) / n * 0.62,
-              col, light=0.95 if lit else 0.1)
-    draw_text(m, -text_w("FC", 0.14) / 2, 0.0, z1 + 0.22, 0.14, "FC", INK, light=0.35)
+        col = (0.98, 0.28, 0.28) if (lit and f > 0.88) else (zc if lit else UNLIT)
+        m.box(x, -0.02, z0 + (z1 - z0) * f, 0.32, 0.10, (z1 - z0) / n * 0.64,
+              col, light=0.95 if lit else 0.3)
+    draw_text(m, -text_w("FC", 0.17) / 2, 0.0, z1 + 0.26, 0.17, "FC", INK, light=0.9)
 
 
 def _lamps(m, snap):
-    """Pilotos de zona FC y de banda de potencia: el activo encendido, el resto apagado."""
+    """Pilotos de zona FC y de banda de potencia + W/kg, todo centrado en el hueco."""
     zs = snap.get("zcolors") or ZCOLORS_FALLBACK
     ws = snap.get("wcolors") or ZCOLORS_FALLBACK
     zi, wi = int(snap.get("zone_idx") or 0), int(snap.get("wband") or 0)
     for z, (cols, idx, lab) in enumerate(((zs, zi, "ZONA FC"), (ws, wi, "BANDA W"))):
-        zz = -2.36 - z * 0.30
-        draw_text(m, -1.42, 0.0, zz, 0.13, lab, (0.46, 0.52, 0.58), light=0.3, align="r")
+        zz = -2.30 - z * 0.32
+        draw_text(m, -1.35, 0.0, zz, 0.15, lab, DIM, light=0.9, align="r")
         for i, chex in enumerate(cols):
             lit = i == idx
-            m.box(-1.20 + i * 0.50, 0.0, zz, 0.36, 0.10, 0.16,
-                  _hex(chex) if lit else (0.19, 0.21, 0.25), light=0.95 if lit else 0.05)
+            m.box(-1.05 + i * 0.44, -0.02, zz, 0.32, 0.12, 0.17,
+                  _hex(chex) if lit else UNLIT, light=0.95 if lit else 0.35)
+    h = 0.17
+    draw_text(m, 1.42, 0.0, -2.24, h * 0.78, "W/KG", DIM, light=0.9)
+    draw_digits(m, 1.42, 0.0, -2.52, h * 0.92, "%3.1f" % float(snap.get("wkg") or 0),
+                WHITE, light=0.9)
 
 
 def _strips(m, snap):
-    """Tiras digitales: arriba tiempo/kcal/dist, al centro promedios, al pie el estado."""
-    h = 0.17
+    """Tiras digitales: arriba tiempo/kcal/dist/atleta, al centro promedios, al pie estado.
+
+    Todo lo del pie queda centrado en el hueco entre el dial de vel y el de cad, para
+    que ninguna etiqueta se meta debajo de los diales chicos.
+    """
+    h = 0.18
     for i, (lab, val, col) in enumerate((
             ("TIEMPO", _clock(snap.get("elapsed_s") or 0), WHITE),
             ("KCAL", "%4.0f" % float(snap.get("total_kcal") or 0), GREEN),
             ("DIST KM", "%04.1f" % float(snap.get("dist_km") or 0), CYAN))):
-        x = -3.95 + i * 2.60
-        draw_text(m, x, 0.0, 2.44, h * 0.66, lab, (0.62, 0.68, 0.74), light=0.55)
-        draw_digits(m, x, 0.0, 2.18, h, val, col, light=0.95)
+        x = -3.62 + i * 1.78
+        draw_text(m, x, 0.0, 2.46, h * 0.70, lab, DIM, light=0.9)
+        draw_digits(m, x, 0.0, 2.18, h * 0.92, val, col, light=0.95)
+    atleta = "%dA %dKG %s" % (int(snap.get("age") or 0), round(float(snap.get("weight") or 0)),
+                              (snap.get("sex") or "M"))
+    draw_text(m, 1.72, 0.0, 2.46, h * 0.70, "ATLETA", DIM, light=0.9)
+    draw_text(m, 1.72, 0.0, 2.16, h * 0.72, atleta, WHITE, light=0.9)
 
+    # 4 columnas centradas en el hueco entre los diales chicos (nada pisa vel ni cad)
     for i, (lab, val, col) in enumerate((
             ("FC MED", "%3d" % round(float(snap.get("avg_hr") or 0)), AMBER),
             ("FC MAX", "%3d" % int(snap.get("max_hr") or 0), RED),
             ("%FCMAX", "%2.0f" % float(snap.get("pct_max") or 0), WHITE),
             ("EST", "%3d" % int(snap.get("hrmax") or 0), INK))):
-        x = -2.30 + i * 1.55
-        draw_text(m, x, 0.0, -0.82, h * 0.58, lab, (0.62, 0.68, 0.74), light=0.5)
-        draw_digits(m, x, 0.0, -1.08, h * 0.92, val, col, light=0.9)
+        x = -2.58 + i * 1.36
+        draw_text(m, x, 0.0, -0.80, h * 0.76, lab, DIM, light=0.9)
+        draw_digits(m, x, 0.0, -1.06, h * 0.92, val, col, light=0.9)
     for i, (lab, val, col) in enumerate((
             ("W MED", "%3d" % round(float(snap.get("avg_watts") or 0)), AMBER),
             ("W MAX", "%3d" % int(snap.get("max_watts") or 0), RED),
             ("FTP", "%3d" % int(snap.get("ftp") or 0), GREEN),
             ("EN ZONA", _clock(snap.get("zone_secs") or 0), WHITE))):
-        x = -2.30 + i * 1.55
-        draw_text(m, x, 0.0, -1.44, h * 0.58, lab, (0.62, 0.68, 0.74), light=0.5)
-        draw_digits(m, x, 0.0, -1.70, h * 0.92, val, col, light=0.9)
+        x = -2.58 + i * 1.36
+        draw_text(m, x, 0.0, -1.42, h * 0.76, lab, DIM, light=0.9)
+        draw_digits(m, x, 0.0, -1.68, h * 0.92, val, col, light=0.9)
 
-    draw_text(m, 0.0, 0.0, -2.94, 0.12,
-              "Z%d %s · %d MUESTRAS · %2.1f KCAL/MIN · %2.1f W/KG · %dA %dKG %s" % (
-                  int(snap.get("zone_idx") or 0),
-                  (snap.get("zone_name") or "")[:8].upper(),
-                  int(snap.get("n") or 0), float(snap.get("kcal_min") or 0),
-                  float(snap.get("wkg") or 0),
-                  int(snap.get("age") or 0), round(float(snap.get("weight") or 0)),
-                  (snap.get("sex") or "M")),
-              INK, light=0.45, align="c")
+    estado = "Z%d %s · %d MUESTRAS · %2.1f KCAL/MIN" % (
+        int(snap.get("zone_idx") or 0),
+        (snap.get("zone_name") or "")[:8].upper(),
+        int(snap.get("n") or 0), float(snap.get("kcal_min") or 0))
+    draw_text(m, 0.0, 0.0, -2.96, 0.105, estado, INK, light=0.9, align="c")
 
 
 def _clock(secs) -> str:
