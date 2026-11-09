@@ -9,6 +9,9 @@ Vistas: h = barras de FC arriba, w = barras de watts, g = tablero de gauges
 (diales braille con agujas animadas que reemplaza tiles/graficos/zonas),
 p = pista de carreras: ovalo en braille con la bici en la vuelta de `lap_m` y
 tablero de vueltas. El marcador se mueve a 10 fps con su propio timer.
+Se navega entre las vistas con ← → (en la pista, [ ] cambia el largo de vuelta).
+Con el toggle global (`3`) la vista activa se puede renderizar en 3D (barras,
+dial o perspectiva); por defecto las vistas se dibujan en 2D.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 from rich.text import Text
 
+from . import v3d
 from .bigfont import render_big, render_heart
 from .config import Config, save_config
 from .gauges import Gauge
@@ -35,10 +39,27 @@ from .zones import zone_for_hr, power_band, W_COLORS, POWER_BANDS
 SPD_COLOR = "#22d3ee"
 CAD_COLOR = "#a78bfa"
 GLYPH8 = " ▁▂▃▅▆▇█"
-HINTS = (" q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · "
-         "h: FC · w: watts · g: tablero · p: pista · [ ]: largo de vuelta")
+# orden de las vistas para navegar con las flechas
+VIEWS = ["hr", "watts", "gauge", "pista"]
+VIEW_KEYS = {"hr": "h", "watts": "w", "gauge": "g", "pista": "p"}
+VIEW_NAMES = {"hr": "FC", "watts": "watts", "gauge": "tablero", "pista": "pista"}
 # presets del largo de vuelta para la vista pista (se recorren con [ y ])
 LAP_PRESETS = [1000, 2000, 3000, 5000, 10000, 20000]
+
+
+def hints_text(view: str) -> Text:
+    """Linea de ayuda: la vista activa va en negrita, se cambia con ← →."""
+    t = Text(" q: salir y grabar FIT+CSV · r: reiniciar · s: reconectar · c: config · ")
+    t.append("← →: ", style="#6b7280")
+    for i, v in enumerate(VIEWS):
+        if i:
+            t.append(" ", style="#6b7280")
+        if v == view:
+            t.append(f"{VIEW_KEYS[v]} {VIEW_NAMES[v]}", style="bold #f8fafc")
+        else:
+            t.append(VIEW_KEYS[v], style="#9ca3af")
+    t.append(" · [ ]: largo vuelta", style="#6b7280")
+    return t
 
 
 def _round_up(v: float, m: int) -> float:
@@ -125,6 +146,9 @@ class HRDash(App):
         ("w", "view_w", "Vista watts"),
         ("g", "view_gauge", "Tablero"),
         ("p", "view_pista", "Vista pista"),
+        ("3", "toggle_gl", "3D full / 2d"),
+        ("left", "cycle_view(-1)", "Vista anterior"),
+        ("right", "cycle_view(1)", "Vista siguiente"),
         ("[", "cycle_lap(-1)", "Vuelta mas corta"),
         ("]", "cycle_lap(1)", "Vuelta mas larga"),
     ]
@@ -184,6 +208,7 @@ class HRDash(App):
         self._err_round = False
         self._pulse = 0
         self.view = "hr"          # "hr" | "watts" | "gauge": vista principal
+        self.gl = False           # True: la vista activa se renderiza en 3D (toggle con `3`)
         self._beat_t0 = time.time()
         self._beat_period = 1.0
         self._heart_lvl = -1      # ultimo nivel dibujado (evita redibujos)
@@ -235,7 +260,7 @@ class HRDash(App):
         self.set_interval(0.1, self._tick_heart)   # corazon a 10 fps, independiente del dato
         self.set_interval(0.1, self._tick_gauges)  # agujas a 10 fps (solo en vista tablero)
         self.set_interval(0.1, self._tick_pista)   # marcador de la bici a 10 fps
-        self.query_one("#hints", Static).update(HINTS)
+        self.query_one("#hints", Static).update(hints_text(self.view))
         self.refresh_all()
 
     async def _run(self, source, label: str) -> None:
@@ -268,6 +293,22 @@ class HRDash(App):
 
     def action_view_pista(self) -> None:
         self._set_view("pista")
+
+    def action_toggle_gl(self) -> None:
+        """Alterna la vista activa entre el render 3D (full) y el 2D actual."""
+        self.gl = not self.gl
+        try:
+            self.query_one("#hints", Static).update(hints_text(self.view))
+        except Exception:  # noqa: BLE001 - la linea de ayuda no debe tumbar la app
+            pass
+        self.refresh_all()
+
+    def action_cycle_view(self, delta: int) -> None:
+        """Recorre las vistas con ← →: FC -> watts -> tablero -> pista."""
+        if len(self.screen_stack) > 1:
+            return          # hay modal abierto: ahi las flechas mueven el cursor
+        i = VIEWS.index(self.view) if self.view in VIEWS else 0
+        self._set_view(VIEWS[(i + delta) % len(VIEWS)])
 
     def action_cycle_lap(self, delta: int) -> None:
         """Recorre los presets de largo de vuelta (1, 2, 3, 5, 10, 20 km)."""
@@ -303,6 +344,11 @@ class HRDash(App):
             self.screen.add_class("pista")
         self._tick_gauges()      # primera pincelada inmediata (o vuelve el grafico)
         self._tick_pista()
+        if not self._ui_error:
+            try:
+                self.query_one("#hints", Static).update(hints_text(self.view))
+            except Exception:  # noqa: BLE001 - la linea de ayuda no debe tumbar la app
+                pass
         self.refresh_all()
 
     def action_open_config(self) -> None:
@@ -407,6 +453,10 @@ class HRDash(App):
         elif self.view == "pista":
             self._safe_draw(self._draw_pista, hr, zone)
             self._safe_draw(self._draw_laps, hr, zone)
+        elif self.view == "hr" and self.gl:
+            self._safe_draw(self._draw_hr_3d, hr, zone)
+        elif self.view == "watts" and self.gl:
+            self._safe_draw(self._draw_watts_3d)
         else:
             self._safe_draw(self._draw_tiles, hr, zone)
             self._safe_draw(self._draw_charts, zone)
@@ -418,7 +468,7 @@ class HRDash(App):
         if self._ui_error:               # ronda limpia tras un error: restaurar ayuda
             self._ui_error = ""
             try:
-                self.query_one("#hints", Static).update(HINTS)
+                self.query_one("#hints", Static).update(hints_text(self.view))
             except Exception:  # noqa: BLE001
                 pass
 
@@ -671,6 +721,29 @@ class HRDash(App):
             t.append(f"│ {fmt_clock(secs):>7} {kj:6.0f} kJ\n", style="#9ca3af")
         self.query_one("#zones_w", Static).update(t)
 
+    def _draw_hr_3d(self, hr, zone) -> None:
+        """Vista grafica 3D: barras de tiempo en zona (una por zona) con profundidad."""
+        s, cfg = self.session, self.config
+        items = [(z.name, float(s.zone_seconds[z.idx]), z.color) for z in cfg.zones()]
+        st = self.query_one("#ch_hr", Static)
+        st.update(v3d.render_bars_3d(int(st.size.width or 80), int(st.size.height or 8), items))
+        # tira chica: la otra metrica (watts) en la grafica 2D equivalente
+        ch_w = self.query_one("#ch_w", Static)
+        width = max(20, (st.size.width or 80) - 9)
+        ch_w.update(self._w_chart(s.window(width), 4, width))
+
+    def _draw_watts_3d(self) -> None:
+        """Vista grafica 3D: barras de trabajo (kJ) por banda de potencia, con profundidad."""
+        s = self.session
+        items = [(name, float(kj), col) for (name, _lo, _hi), kj, col
+                 in zip(POWER_BANDS, s.pzone_kj, W_COLORS)]
+        st = self.query_one("#ch_hr", Static)
+        st.update(v3d.render_bars_3d(int(st.size.width or 80), int(st.size.height or 8), items))
+        # tira chica: la otra metrica (FC) en la grafica 2D equivalente
+        ch_w = self.query_one("#ch_w", Static)
+        width = max(20, (st.size.width or 80) - 9)
+        ch_w.update(self._hr_chart(s.window(width), 4, width))
+
     # ---- vista tablero: cluster de gauges con agujas animadas ----
     def _needle_targets(self) -> dict:
         s, tr = self.session, self.tr
@@ -721,10 +794,16 @@ class HRDash(App):
     def _render_gauge(self, wid: str, value, lo, hi, segs, major, minor,
                       label, sub, color, big=False, avg=None) -> None:
         st = self.query_one(f"#{wid}", Static)
-        g = self._gauges[wid]
-        st.update(g.render(st.size.width or 40, st.size.height or 16, value,
-                           lo, hi, segs, major, minor, label, sub, color,
-                           big=big, avg=avg))
+        if self.gl:
+            t = v3d.render_gauge_3d(st.size.width or 40, st.size.height or 16, value,
+                                    lo, hi, segs, major, minor, label, sub, color,
+                                    big=big, avg=avg)
+        else:
+            g = self._gauges[wid]
+            t = g.render(st.size.width or 40, st.size.height or 16, value,
+                         lo, hi, segs, major, minor, label, sub, color,
+                         big=big, avg=avg)
+        st.update(t)
 
     def _draw_cluster(self) -> None:
         s, cfg = self.session, self.config
@@ -838,7 +917,7 @@ class HRDash(App):
         else:
             sub = "sin distancia: el rodillo no manda 2ACF/2A5B o no pedaleas"
         st.update(self._track.render(w, h, self._marker, label, sub, zone.color,
-                                     trail=self._trail, lap_km=lap_km))
+                                     trail=self._trail, lap_km=lap_km, persp=self.gl))
 
     def _draw_laps(self, hr=None, zone=None) -> None:
         """Tablero de vueltas: flash de la ultima cerrada + vuelta en curso + historial."""

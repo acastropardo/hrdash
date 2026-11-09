@@ -59,10 +59,14 @@ class Track:
         self._cum: list[float] = []        # longitud acumulada de cada punto
         self._pts: list[tuple[float, float]] = []
         self._total = 0.0
+        self._persp = False                 # vista 3d: proyecta el ovalo con perspectiva
+        self._cy = 0.0
+        self._r_out = 0.0
 
     # ---- fondo cacheado ----
     def _build_bg(self, w, dh, lap_km):
         pw, pph, ax, bx, cy, r_out, band = self._geo
+        self._cy, self._r_out = cy, r_out
         r_in = r_out - band
         px = Px()
         # polyline del centro del trazado (meta en el medio de la recta de arriba)
@@ -104,6 +108,10 @@ class Track:
 
         def add(x, y):
             nonlocal acc, prev
+            if self._persp:
+                span = max(self._r_out, 1.0)
+                f = max(0.55, 1.0 - 0.22 * abs(y - self._cy) / span)
+                x, y = x, self._cy + (y - self._cy) * f
             if prev:
                 acc += math.hypot(x - prev[0], y - prev[1])
             pts.append((x, y))
@@ -150,15 +158,17 @@ class Track:
         return x, y, dx / ln, dy / ln
 
     # ---- frame completo ----
-    def render(self, w, h, frac, label, sub, color, trail=(), lap_km=None) -> Text:
+    def render(self, w, h, frac, label, sub, color, trail=(), lap_km=None,
+               persp: bool = False) -> Text:
         w, h = int(max(12, w or 12)), int(max(4, h or 4))
         lap_km = lap_km if lap_km else 5.0
         dh = h - 2
         geo = _geo(w, dh)
         if not geo:
             return self._fallback(w, label, sub, color, frac)
-        sig = (w, dh, round(lap_km, 2))
+        sig = (w, dh, round(lap_km, 2), self._persp)
         if sig != self._sig:
+            self._persp = persp
             self._geo = geo
             self._bg = self._build_bg(w, dh, lap_km)
             self._sig = sig

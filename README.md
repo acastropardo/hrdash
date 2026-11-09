@@ -54,6 +54,8 @@ Teclas dentro del dashboard:
 | `w` | vista principal del gráfico: **WATTS** (la tira chica muestra siempre la métrica opuesta) |
 | `g` | **vista tablero**: gauges tipo tacómetro (FC grande + watts, vel, cad y panel digital) |
 | `p` | **vista pista**: circuito tipo velódromo con la bici en la vuelta en curso |
+| `3` | alternar la vista activa entre **3D full** y **2D** (como esta ahora) |
+| `←` / `→` | navegar entre vistas: **FC → watts → tablero → pista** (la ayuda marca la activa) |
 | `[` / `]` | en la vista pista: recorre los largos de vuelta (1, 2, 3, **5**, 10, 20 km) |
 
 ### Vista pista (`p`)
