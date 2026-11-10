@@ -24,36 +24,81 @@ import time
 
 VS = """#version 330
 in vec3 in_position; in vec3 in_normal; in vec3 in_color; in float in_light;
-out vec3 v_color; out vec3 v_normal; out float v_light;
+out vec3 v_color; out vec3 v_normal; out float v_light; out vec3 v_world;
 uniform mat4 mvp;
 void main(){
     gl_Position = mvp * vec4(in_position, 1.0);
     v_color = in_color;
     v_normal = in_normal;
     v_light = in_light;
+    v_world = in_position;
 }"""
 
 FS = """#version 330
-in vec3 v_color; in vec3 v_normal; in float v_light;
+in vec3 v_color; in vec3 v_normal; in float v_light; in vec3 v_world;
 out vec4 o;
+uniform vec3 EYE;
 void main(){
-    vec3 L = normalize(vec3(0.30, -0.55, 0.75));
-    float d = max(dot(normalize(v_normal), L), 0.0);
-    vec3 lit = v_color * (0.24 + 0.80 * d);
+    vec3 N = normalize(v_normal);
+    // Pabellon: luz principal calida (3000K), relleno frio y rebote del madera.
+    // Con una sola luz fria plana el velodromo sale gris; las referencias muestran
+    // madera ambarina con charcos de luz bajo las lamparas.
+    vec3 L1 = normalize(vec3(0.30, -0.55, 0.75));
+    vec3 L2 = normalize(vec3(-0.45, 0.20, 0.55));
+    vec3 amb = mix(vec3(0.055, 0.060, 0.072), vec3(0.150, 0.160, 0.185), clamp(N.z, 0.0, 1.0));
+    vec3 lit = v_color * (amb + vec3(0.95, 0.87, 0.73) * max(dot(N, L1), 0.0)
+                          + vec3(0.19, 0.24, 0.32) * max(dot(N, L2), 0.0));
+    vec3 V = normalize(EYE - v_world);
+    float spec = pow(max(dot(N, normalize(V + L1)), 0.0), 22.0);
+    lit += vec3(0.14, 0.12, 0.10) * spec;             // brillo del tablon barnizado
     vec3 glow = v_color * 1.22;
-    o = vec4(mix(lit, glow, clamp(v_light, 0.0, 1.0)), 1.0);
+    vec3 col = clamp(mix(lit, glow, clamp(v_light, 0.0, 1.0)), 0.0, 1.0);
+    float fog = clamp(1.0 - exp(-length(EYE - v_world) * 0.011), 0.0, 1.0);
+    o = vec4(mix(col, vec3(0.052, 0.060, 0.075), fog), 1.0);
 }"""
 
 FLOOR = (0.09, 0.10, 0.13)
 VATTR = "3f 3f 3f 1f"                     # posicion, normal, color, emisivo
 FIELDS = ("in_position", "in_normal", "in_color", "in_light")
 GRID = (0.19, 0.22, 0.27)
-ASPHALT = (0.17, 0.18, 0.21)
-EDGE = (0.62, 0.66, 0.70)
-META = (0.90, 0.92, 0.95)
-KERB = (0.52, 0.20, 0.16)            # kerb rojo del borde interior
+
+# Paleta del velodromo, muestreada de las fotos de referencia (pabellon a ~3000K):
+# madera de pino siberiano ambarina, no asfalto gris.
+WOOD = (0.615, 0.443, 0.263)              # tablon iluminado (#9d7143)
+WOOD_D = (0.551, 0.392, 0.231)            # junta entre tablones (la base, mas oscura)
+# Tono por tablon: la variacion es pequeña y constante a lo largo del tablon. Con variacion
+# por cuadro la pista sale en "ladrillos" (parquet), no en tablones largos.
+WOODS = [WOOD, (0.648, 0.481, 0.292), (0.583, 0.412, 0.244), (0.661, 0.497, 0.305),
+         (0.626, 0.457, 0.271), (0.566, 0.398, 0.236), (0.639, 0.468, 0.278),
+         (0.602, 0.430, 0.255), (0.654, 0.488, 0.297), (0.591, 0.420, 0.248)]
+APRON = (0.246, 0.345, 0.478)             # apron de hormigon pintado, en el interior
+SHADOW = (0.098, 0.105, 0.118)
+AZUR = (0.216, 0.329, 0.490)              # cote d'azur: el azul del borde interior
+LINE_BLACK = (0.055, 0.055, 0.062)        # linea de referencia (datum), la mas rapida
+LINE_RED = (0.686, 0.157, 0.145)          # linea del sprinter (70 cm sobre la negra)
+LINE_BLUE = (0.231, 0.369, 0.545)         # linea del stayer (madison)
+LINE_WHITE = (0.827, 0.847, 0.871)        # borde exterior
+META = (0.900, 0.920, 0.950)              # meta cuadriculada, negro sobre blanco
+WALL = (0.447, 0.314, 0.204)              # madera del muro perimetral
+SEAT = (0.157, 0.196, 0.255)              # butacas
+SEAT_F = (0.118, 0.145, 0.185)            # escalon entre filas
+# Bloques de color en las gradas (bloques de butacas sueltos, como en las fotos) y
+# pasillos cada 12 m: sin pasillos la grada se lee como una mancha continua.
+SEATS = [SEAT, (0.400, 0.290, 0.130), (0.420, 0.165, 0.145), (0.215, 0.300, 0.395)]
+STEEL = (0.26, 0.29, 0.34)
+RIB = (0.349, 0.380, 0.420)               # cerchos de madera laminada
+ROOF = (0.196, 0.212, 0.239)
+LAMP = (0.941, 0.863, 0.651)              # lamparas calidas colgadas
+INFIELD = (0.106, 0.122, 0.149)
+
 HALF_W = 5.0                         # ancho de pista: 8 calles de 1,22 m
 TRACK_LEN = 400.0                    # perimetro del trazado (a escala real, 1 u = 1 m)
+TRACK_W = 10.0                       # 0..10 es la coordenada lateral desde el borde interior
+DECK = 1.05                          # el tablon esta elevado sobre el piso del recinto
+PLANK = 0.24                         # ancho del tablon (junta en el sentido de marcha)
+WALL_H = 0.90                        # muro de seguridad sobre el borde exterior
+STAND_ROWS, STAND_RUN, STAND_RISE = 11, 0.85, 0.40      # gradas escalonadas
+ROOF_H, LAMP_H = 13.5, 6.5           # altura del cercho y de las lamparas colgadas
 CHASE_DIST = 2.4                    # chase por defecto; la rueda acerca hasta primera persona
 ZOOM_MIN, ZOOM_MAX = 0.20, 6.0
 STEP_ZOOM = 0.18                    # salto por notch de rueda
@@ -75,6 +120,25 @@ def _hex(col) -> tuple[float, float, float]:
 def _dial(frac: float) -> float:
     """Angulo (rad) del valor fraccionado 0..1 sobre el arco de 270 grados."""
     return math.radians(A0 - SWEEP * max(0.0, min(1.0, frac)))
+
+
+def _surf(pt, d, lift=0.0):
+    """Punto de la superficie a la distancia lateral `d` (medida desde el borde interior).
+
+    Devuelve (posicion, normal_de_superficie, normal_horizontal). La altura es
+    `DECK + tan(bank) * d`: `DECK` es el nivel del tablon sobre el piso del recinto, por eso
+    el muro se ve desde la pista; `bank` es por punto, así que en las rectas sale plano.
+
+    `lift` levanta unos milimetros la banda: las lineas pintadas y los tablones se apoyan
+    sobre la capa base, y en el mismo plano el z-buffer elige al azar (z-fighting), que es
+    lo que salia como manchas.
+    """
+    x, y, tx, ty, bank = pt
+    ln = math.hypot(tx, ty) or 1.0
+    nx, ny = ty / ln, -tx / ln
+    cb, sb = math.cos(bank), math.sin(bank)
+    p = (x + nx * (d - HALF_W), y + ny * (d - HALF_W), DECK + lift + math.tan(bank) * d)
+    return p, (-nx * sb, -ny * sb, cb), (nx, ny)
 
 
 class Mesh:
@@ -188,30 +252,39 @@ class Mesh:
                 self.box(sx, y0 + curve, (z0 + z1) / 2, 0.16, 0.12,
                          z1 - z0 + 0.6, steel)
 
-    def ribbon(self, pts, half, col, off=0.0, light=0.0) -> None:
+    def ribbon(self, pts, half, col, off=0.0, light=0.0, tint=None, lift=0.0) -> None:
         """Cinta continua sobre el trazado `pts` (x, y, tx, ty, bank por punto).
 
         El peralte es por punto (en un 400 m real solo las curvas estan inclinadas) y la
-        altura de cada banda es `tan(bank) * (q + HALF_W)` con `q` la coordenada lateral
-        medida desde el borde interior, que queda a 0. `off` desplaza la cinta a lo ancho
-        (lineas y kerbs sobre el asfalto).
+        altura de cada banda es `DECK + tan(bank) * (q + HALF_W)` con `q` la coordenada
+        lateral medida desde el borde interior, que queda a 0. `off` desplaza la cinta a lo
+        ancho (lineas pintadas y tablones sobre el madera). `tint`, si se da, es una funcion
+        que recibe el centro del cuadro y devuelve el multiplicador de calidez: es el
+        charco de luz bajo cada lampara, horneado por vertice porque el programa no tiene
+        luces puntuales (coste solo de construccion, la capa se sube una vez).
         """
         prev = None
-        for (x, y, tx, ty, bank) in pts:
-            ln = math.hypot(tx, ty) or 1.0
-            nx, ny = ty / ln, -tx / ln                     # normal horizontal (exterior)
-            tb = math.tan(bank)
-            q_in, q_out = off - half, off + half
-            a_in = (x + nx * q_in, y + ny * q_in, tb * (q_in + HALF_W))
-            a_out = (x + nx * q_out, y + ny * q_out, tb * (q_out + HALF_W))
-            cb, sb = math.cos(bank), math.sin(bank)
+        for pt in pts:
+            a_in, nrm, _ = _surf(pt, off - half, lift)
+            a_out, _, _ = _surf(pt, off + half, lift)
             if prev:
-                self.quad(prev[0], prev[1], a_out, a_in, col, (-nx * sb, -ny * sb, cb), light)
+                if tint is None:
+                    self.quad(prev[0], prev[1], a_out, a_in, col, nrm, light)
+                else:
+                    cs = (_warm(col, tint(prev[0])), _warm(col, tint(prev[1])),
+                          _warm(col, tint(a_out)), _warm(col, tint(a_in)))
+                    self.vquad(prev[0], prev[1], a_out, a_in, cs, nrm, light)
             prev = (a_in, a_out)
 
     def floor(self, size=3.2, step=0.4, col=GRID, z0=0.0, lw=0.012) -> None:
-        """Piso con grilla: un platano oscuro + lineas finas, apoyado en z0."""
+        """Piso con grilla: un platano oscuro + lineas finas, apoyado en z0.
+
+        Con `step=0` la grilla se omite (el piso del velodromo es liso, las lineas de
+        5 m de la escena de historial no pintan nada a esa escala).
+        """
         self.box(0, 0, z0 - 0.04, 2 * size, 2 * size, 0.06, FLOOR)
+        if not step:
+            return
         k = max(1, int(2 * size / step))
         for i in range(k + 1):
             p = -size + i * (2 * size / k)
@@ -222,9 +295,13 @@ class Mesh:
         """Anexa otra malla (ya transformada): un solo VBO para todo el cluster."""
         self.v.extend(other.v)
 
-    def segment(self, a, b, r, col, light=0.0) -> None:
-        """Prisma de 4 caras entre dos puntos: un miembro (muslo, espinilla, brazo)
-        o un tubo del cuadro. La seccion es un rombo, suficiente a esta escala."""
+    def segment(self, a, b, r, col, light=0.0, sides=4) -> None:
+        """Prisma entre dos puntos: un miembro (muslo, espinilla, brazo) o un tubo del
+        cuadro. La seccion es un rombo (4 caras), suficiente a esta escala.
+
+        Con `sides=6` la seccion se lee redondeada desde la camara: el rombo visto de canto
+        sale como una tarjeta plana, que es lo que delataba al atleta.
+        """
         d = [b[i] - a[i] for i in range(3)]
         ln = math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) or 1.0
         d = [d[0] / ln, d[1] / ln, d[2] / ln]
@@ -233,9 +310,12 @@ class Mesh:
         ul = math.sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]) or 1.0
         u = [u[0] / ul, u[1] / ul, u[2] / ul]
         v = [d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2], d[0] * u[1] - d[1] * u[0]]
-        ring = [u, v, [-x for x in u], [-x for x in v]]
-        for i in range(4):
-            s1, s2 = ring[i], ring[(i + 1) % 4]
+        ring = []
+        for k in range(sides):
+            ca, sa = math.cos(2 * math.pi * k / sides), math.sin(2 * math.pi * k / sides)
+            ring.append([u[i] * ca + v[i] * sa for i in range(3)])
+        for i in range(sides):
+            s1, s2 = ring[i], ring[(i + 1) % sides]
             a1 = tuple(a[j] + r * s1[j] for j in range(3))
             a2 = tuple(a[j] + r * s2[j] for j in range(3))
             b1 = tuple(b[j] + r * s1[j] for j in range(3))
@@ -257,6 +337,56 @@ class Mesh:
                  fwd[2] * math.cos(a0) + up[2] * math.sin(a0))
             self.quad(pt(a0, -thick / 2.0), pt(a0, thick / 2.0),
                       pt(a1, thick / 2.0), pt(a1, -thick / 2.0), col, n, light)
+
+    def vtri(self, a, b, c, cols, n, light=0.0) -> None:
+        """Triangulo con color por vertice.
+
+        Hace falta para el charco de luz: con un color por cuadro, la gradacion sale como
+        "ladrillos" (una linea cada metro de cuerda) en vez de como un degradado suave sobre
+        el tablon. Con color por vertice el interpolador lo resuelve solo.
+        """
+        for p, col in zip((a, b, c), cols):
+            pw, _ = self._wpoint(p, n)
+            self.v.extend((pw[0], pw[1], pw[2], n[0], n[1], n[2], col[0], col[1], col[2], light))
+
+    def vquad(self, a, b, c, d, cols, n, light=0.0) -> None:
+        """Quad con color por vertice (verts en el mismo orden que `quad`)."""
+        self.vtri(a, b, c, (cols[0], cols[1], cols[2]), n, light)
+        self.vtri(a, c, d, (cols[0], cols[2], cols[3]), n, light)
+
+    def plate(self, c, r, n, col, segs=18, light=0.0) -> None:
+        """Disco plano en coordenadas de mundo: sombra de contacto y plato de la bici.
+
+        La sombra es un parche oscuro apoyado en la superficie peraltada; sin ella la bici
+        flota y la camara no tiene anclaje visual (es lo que hace que un render "de baja").
+        """
+        ref = (1.0, 0.0, 0.0) if abs(n[0]) < 0.9 else (0.0, 1.0, 0.0)
+        u = [n[1] * ref[2] - n[2] * ref[1], n[2] * ref[0] - n[0] * ref[2], n[0] * ref[1] - n[1] * ref[0]]
+        ul = math.sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]) or 1.0
+        u = [u[0] / ul, u[1] / ul, u[2] / ul]
+        v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]]
+        for i in range(segs):
+            a0, a1 = 2 * math.pi * i / segs, 2 * math.pi * (i + 1) / segs
+
+            def pt(a):
+                return (c[0] + r * (u[0] * math.cos(a) + v[0] * math.sin(a)),
+                        c[1] + r * (u[1] * math.cos(a) + v[1] * math.sin(a)),
+                        c[2] + r * (u[2] * math.cos(a) + v[2] * math.sin(a)))
+            self.tri(c, pt(a0), pt(a1), col, tuple(n), light)
+
+    def spoke(self, c, r, fwd, up, lat, ang, col, w=0.014, light=0.0) -> None:
+        """Radio de rueda en el plano (avance, arriba): sin radios la rueda es un aro negro
+        y desde la camara no se lee que gira."""
+        dirv = [fwd[i] * math.cos(ang) + up[i] * math.sin(ang) for i in range(3)]
+        perp = [dirv[1] * lat[2] - dirv[2] * lat[1], dirv[2] * lat[0] - dirv[0] * lat[2],
+                dirv[0] * lat[1] - dirv[1] * lat[0]]
+        pl = math.sqrt(perp[0] * perp[0] + perp[1] * perp[1] + perp[2] * perp[2]) or 1.0
+        perp = [perp[0] / pl * w / 2.0, perp[1] / pl * w / 2.0, perp[2] / pl * w / 2.0]
+        h = [c[i] + dirv[i] * 0.05 for i in range(3)]
+        t = [c[i] + dirv[i] * (r - 0.015) for i in range(3)]
+        self.quad(tuple(h[i] + perp[i] for i in range(3)), tuple(t[i] + perp[i] for i in range(3)),
+                  tuple(t[i] - perp[i] for i in range(3)), tuple(h[i] - perp[i] for i in range(3)),
+                  col, tuple(lat), light)
 
     @property
     def tris(self) -> int:
@@ -346,28 +476,31 @@ def scene_gauge(snap, anim, aspect=1.6):
     return CLUSTER.build(snap, anim, aspect)
 
 
-def track(r=36.0, bank=math.radians(14.0), step=2.0):
+def track(r=36.0, bank=math.radians(14.0), step=1.0):
     """Trazado de 400 m tipo Londres/Monaco: dos rectas y dos curvas, sentido antihorario
-    (el de carrera), meta en el primer punto.
+    (el de carrera), meta al final de la recta de meta (el punto que cierra la vuelta).
 
-    Muestreado a paso fijo de arco para que la fraccion de vuelta sea distancia real, y
-    con peralte solo en las curvas (rampa de entrada y salida; en rectas el peralte es 0).
+    Muestreado a paso de 1 m para que la fraccion de vuelta sea distancia real y para que
+    las bandas estrechas (lineas pintadas y tablones) no serruchen en las curvas: con paso
+    de 2 m cada linea es un poligono y la junta se ve escalonada.
+
+    El peralte es solo en las curvas, con rampa de entrada y salida. La rampa no es lineal:
+    la transicion recta->peralte (el "flow" del que hablan los constructores) se suaviza con
+    coseno, que es lo que hace que la pista parezca construida y no extruida.
     Cada punto: (x, y, tx, ty, bank). El ultimo punto repite el primero para cerrar.
     """
     L = (TRACK_LEN - 2 * math.pi * r) / 2.0
     half = L / 2.0
     ns, nc = max(2, int(round(L / step))), max(2, int(round(math.pi * r / step)))
     ds, dc = L / ns, math.pi * r / nc            # paso exacto de arco: la fraccion es distancia real
+    T = 0.25 * math.pi                           # tramo de transicion del peralte
 
     def ramp(a):
-        up = min(1.0, a / (0.25 * math.pi))
-        down = min(1.0, (math.pi - a) / (0.25 * math.pi))
-        return bank * min(up, down)
+        t = min(min(1.0, a / T), min(1.0, (math.pi - a) / T))
+        return bank * 0.5 * (1.0 - math.cos(math.pi * t))
 
     pts = []
-    for i in range(ns):                                   # recta de abajo
-        pts.append((-half + i * ds, -r, 1.0, 0.0, 0.0))
-    for i in range(nc):                                   # curva derecha
+    for i in range(nc):                                   # curva derecha (empezamos en meta)
         a = -math.pi / 2 + math.pi * i / nc
         pts.append((half + r * math.cos(a), r * math.sin(a),
                     -math.sin(a), math.cos(a), ramp(math.pi * i / nc)))
@@ -377,25 +510,172 @@ def track(r=36.0, bank=math.radians(14.0), step=2.0):
         a = math.pi / 2 + math.pi * i / nc
         pts.append((-half + r * math.cos(a), r * math.sin(a),
                     -math.sin(a), math.cos(a), ramp(math.pi * i / nc)))
+    for i in range(ns):                                   # recta de meta, acaba en el punto 0
+        pts.append((-half + i * ds, -r, 1.0, 0.0, 0.0))
     pts.append(pts[0])                                    # cierra el trazado
     return pts
 
 
+def _warm(col, t):
+    """Color multiplicado por la calidez del charco de luz (recortado a 1)."""
+    return tuple(min(1.0, v * t) for v in col)
+
+
+def _lamps(pts):
+    """Lamparas colgadas del cercho: posiciones (x, y, z), una cada 6 m de cuerda."""
+    return [(_surf(pt, HALF_W)[0][0], _surf(pt, HALF_W)[0][1], LAMP_H)
+            for pt in pts[:-1][::6]]
+
+
+def _pool(lamps):
+    """Calidez por vertice (1,0 en la penumbra, hasta ~1,3 bajo la lampara) + veta del madera.
+
+    El programa no tiene luces puntuales, asi que el charco de luz se hornea al construir
+    la capa estatica: no cuesta nada por frame y es lo que da el aspecto de pabellon. La
+    veta es una variacion suave de tono por tablon, para que la banda no se lea como rayas
+    de pintura.
+    """
+    def f(p):
+        best = 0.0
+        for lp in lamps:
+            d2 = (p[0] - lp[0]) ** 2 + (p[1] - lp[1]) ** 2 + (p[2] - lp[2]) ** 2
+            v = 120.0 / (120.0 + d2)
+            if v > best:
+                best = v
+        return 1.0 + 0.26 * best
+    return f
+
+
 def build_static(pts):
-    """Lo que no cambia nunca: pista, lineas de calles, kerb, meta y suelo del estadio."""
+    """Lo que no cambia nunca: tablon de pino, lineas UCI, meta, muro, gradas, techo y lamparas.
+
+    La escena se construye una sola vez y se conserva como capa cacheada; por frame solo
+    cambian el rider, la estela y la camara. Todo lo que da el aspecto de velodromo (madera
+    ambarina, el muro que eleva el tablon, las filas de butacas, los cerchos) es estatico,
+    asi que se puede pagar una vez y no entra en el presupuesto de frame.
+    """
     m = Mesh()
-    m.floor(size=95, step=5.0, col=GRID, z0=-0.06, lw=0.06)
-    m.ribbon(pts, HALF_W, ASPHALT)
-    for q in (-HALF_W + 0.12, HALF_W - 0.12):             # lineas de las calles extrema
-        m.ribbon(pts, 0.06, EDGE, off=q)
-    m.ribbon(pts, 0.14, KERB, off=-HALF_W + 0.14)         # kerb del borde interior
-    x, y, tx, ty, b = pts[0]
-    nx, ny = ty, -tx                                      # a lo ancho en el punto de meta
-    for i in range(10):                                   # meta cuadriculada, a traves
-        q = -HALF_W + (i + 0.5)
-        m.box(x + nx * q, y + ny * q, math.tan(b) * (q + HALF_W) + 0.02, 0.4, 1.0, 0.04,
-              META if i % 2 == 0 else (0.05, 0.06, 0.08), 0.0, 0.25)
+    n = len(pts) - 1
+    lamps = _lamps(pts)
+    warm = _pool(lamps)
+
+    # Piso del recinto: liso, sin grilla (a esta escala las lineas de 5 m no pintan).
+    m.floor(size=110, step=0.0, col=INFIELD, z0=-0.05)
+
+    # Tablon de pino: la junta va en el sentido de marcha, que es como se lee desde la chase.
+    # Primero la base (mas oscura) y encima cada tablón algo mas claro, dejando 1 cm de junta:
+    # sin esa junta la pista se lee como una superficie pintada a rayas, no como madera.
+    m.ribbon(pts, HALF_W, WOOD_D, tint=warm)
+    for i in range(int(TRACK_W / PLANK)):
+        m.ribbon(pts, PLANK / 2.0 - 0.012, WOODS[i % len(WOODS)],
+                 off=i * PLANK + PLANK / 2.0 - HALF_W, tint=warm, lift=0.004)
+
+    # Apron: el hormigon pintado del interior, en el nivel del tablon. No sigue el peralte
+    # (es zona llana), por eso no se puede usar ribbon, que inclina con bank.
+    for i in range(n):
+        p0, _n0, h0 = _surf(pts[i], 0.0)
+        p1, _n1, h1 = _surf(pts[i + 1], 0.0)
+        a0 = (p0[0] - h0[0] * 1.8, p0[1] - h0[1] * 1.8, DECK)
+        a1 = (p1[0] - h1[0] * 1.8, p1[1] - h1[1] * 1.8, DECK)
+        cs = (_warm(APRON, warm(a0)), _warm(APRON, warm(a1)), _warm(APRON, warm(p1)), _warm(APRON, warm(p0)))
+        m.vquad(a0, a1, p1, p0, cs, (0.0, 0.0, 1.0))
+
+    # Lineas pintadas, medidas desde el borde interior: cote d'azur, linea negra (la de
+    # referencia, por la que se rueda), roja del sprinter, azul del stayer y borde exterior.
+    for d, col, w in ((0.10, AZUR, 0.20), (0.24, LINE_BLACK, 0.05), (0.94, LINE_RED, 0.05),
+                      (4.30, LINE_BLUE, 0.05), (TRACK_W - 0.05, LINE_WHITE, 0.05)):
+        m.ribbon(pts, w / 2.0, col, off=d - HALF_W, light=0.14, tint=warm, lift=0.010)
+
+    # Meta cuadriculada, negra sobre blanco, atravesando la pista en el punto que cierra la vuelta.
+    for i in range(20):
+        d0 = i * TRACK_W / 20.0
+        d1 = d0 + TRACK_W / 20.0
+        a0, nrm, _ = _surf(pts[0], d0, 0.012)
+        a1, _, _ = _surf(pts[0], d1, 0.012)
+        b0, _, _ = _surf(pts[1], d0, 0.012)
+        b1, _, _ = _surf(pts[1], d1, 0.012)
+        m.quad(a0, a1, b1, b0, _warm(META if i % 2 == 0 else LINE_BLACK, warm(a0)), nrm, 0.22)
+
+    _structure(m, pts, warm)
+    _stands(m, pts, warm)
+    _roof(m, pts, lamps, warm)
     return m
+
+
+def _structure(m, pts, warm) -> None:
+    """Muro perimetral y muro de seguridad: el tablon esta elevado sobre el piso del recinto.
+
+    Sin esta pieza la pista flota sobre un vacio negro, que es lo que hace que el render
+    parezca bajo aunque las proporciones sean correctas.
+    """
+    n = len(pts) - 1
+    for i in range(n):
+        p0, nrm0, h0 = _surf(pts[i], 0.0)
+        p1, nrm1, h1 = _surf(pts[i + 1], 0.0)
+        g0 = (p0[0] - h0[0] * 0.45, p0[1] - h0[1] * 0.45, 0.0)
+        g1 = (p1[0] - h1[0] * 0.45, p1[1] - h1[1] * 0.45, 0.0)
+        m.quad(g0, g1, p1, p0, _warm(WALL, warm(g0)), (-h0[0], -h0[1], 0.0))
+        t0, tnrm, ht0 = _surf(pts[i], TRACK_W)
+        t1, _, ht1 = _surf(pts[i + 1], TRACK_W)
+        s0 = (t0[0] + ht0[0] * 0.30, t0[1] + ht0[1] * 0.30, t0[2] + WALL_H)
+        s1 = (t1[0] + ht1[0] * 0.30, t1[1] + ht1[1] * 0.30, t1[2] + WALL_H)
+        m.quad(t0, t1, s1, s0, _warm(WALL, warm(t0)), tnrm)
+
+
+def _stands(m, pts, warm) -> None:
+    """Gradas: filas escalonadas alrededor del borde exterior, con butacas cada 2 m de cuerda."""
+    n = len(pts) - 1
+
+    def row(pt, r):
+        p, _n, h = _surf(pt, TRACK_W)
+        k = 0.6 + r * STAND_RUN
+        return (p[0] + h[0] * k, p[1] + h[1] * k, p[2] + WALL_H + r * STAND_RISE)
+
+    for i in range(n):
+        for r in range(STAND_ROWS):
+            a, b = row(pts[i], r), row(pts[i + 1], r)
+            c, d = row(pts[i + 1], r + 1), row(pts[i], r + 1)
+            m.quad(a, b, c, d, _warm(SEAT_F, warm(a)), (0.0, 0.0, 1.0))
+    for i in range(0, n, 2):
+        block = i // 12
+        if block % 5 == 3:
+            continue                                        # pasillo entre bloques
+        for r in range(STAND_ROWS):
+            p = row(pts[i], r)
+            h = _surf(pts[i], TRACK_W)[2]
+            yaw = math.atan2(h[1], h[0])
+            col = SEAT if block % 3 else SEATS[(r + block // 3) % len(SEATS)]
+            m.box(p[0], p[1], p[2] + 0.24, 0.44, 0.48, 0.46, _warm(col, warm(p)), yaw, 0.04)
+
+
+def _roof(m, pts, lamps, warm) -> None:
+    """Cerchos de madera laminada con las lamparas calidas colgadas.
+
+    El techo es lo que cierra la escena desde primera persona: sin el, el cuadro se llena de
+    vacio y la luz del shader no tiene de donde venir visualmente.
+    """
+    idx = list(range(0, len(pts) - 1, 5))
+
+    def arch(i):
+        p, _n, h = _surf(pts[i], HALF_W)
+        a = (p[0] - h[0] * (HALF_W + 14.0), p[1] - h[1] * (HALF_W + 14.0), ROOF_H * 0.45)
+        b = (p[0], p[1], ROOF_H)
+        k = HALF_W + STAND_ROWS * STAND_RUN + 5.0
+        c = (p[0] + h[0] * k, p[1] + h[1] * k, ROOF_H * 0.45)
+        return a, b, c
+
+    ribs = [arch(i) for i in idx]
+    for j, (a, b, c) in enumerate(ribs):
+        m.segment(a, b, 0.24, _warm(RIB, warm(b)), 0.06, sides=4)
+        m.segment(b, c, 0.24, _warm(RIB, warm(b)), 0.06, sides=4)
+        if j + 1 < len(ribs):
+            a1, b1, c1 = ribs[j + 1]
+            m.quad(a, a1, b1, b, _warm(ROOF, warm(b)), (0.0, 0.0, 1.0))
+            m.quad(b, b1, c1, c, _warm(ROOF, warm(b)), (0.0, 0.0, 1.0))
+    for lp in lamps:
+        m.box(lp[0], lp[1], lp[2], 0.34, 0.34, 0.14, LAMP, 0.0, 1.0)
+        top = (lp[0], lp[1], ROOF_H * 0.45 + (ROOF_H - ROOF_H * 0.45) * 0.4)
+        m.segment((lp[0], lp[1], lp[2] + 0.07), top, 0.02, STEEL, 0.1, sides=4)
 
 
 SKIN = (0.62, 0.49, 0.41)
@@ -410,26 +690,38 @@ REAR, FRONT = (-0.53, WR), (0.56, WR)                   # ejes (batalla ~1,09 m)
 HTUBE, BAR = (0.40, 0.70), (0.47, 0.62)                 # direccion y manillar
 HIP, SHO, HEAD = (-0.16, 0.78), (0.08, 1.06), (0.20, 1.22)   # postura inclinada de carrera
 CRANK, THIGH, SHIN = 0.17, 0.43, 0.44
+ARM_U, ARM_F = 0.32, 0.31                 # brazo: hombro->codo y codo->mano
 Q_RIDER = -3.0                          # linea del rider: 3 m dentro del eje de pista
 
 
-def _knee(H, F, L1, L2):
-    """Rodilla por IK de dos tramos en el plano sagital (s, h): (rodilla, pie)."""
+def _knee(H, F, L1, L2, bend=1.0):
+    """Rodilla o codo por IK de dos tramos en el plano sagital (s, h).
+
+    `bend` decide hacia donde dobla: la rodilla hacia fuera de la linea (1) y el codo hacia
+    abajo (-1). Si la distancia H->F supera la suma de los tramos, el miembro sale casi
+    recto, que es la postura real agarrado al manillar.
+    """
     ds, dh = F[0] - H[0], F[1] - H[1]
     D = math.hypot(ds, dh) or 1e-6
     D = min(D, L1 + L2 - 1e-4)
     ca = max(-1.0, min(1.0, (L1 * L1 + D * D - L2 * L2) / (2 * L1 * D)))
     sa = math.sqrt(max(0.0, 1.0 - ca * ca))
     us, uh = ds / D, dh / D
-    return (H[0] + L1 * (ca * us - sa * uh), H[1] + L1 * (sa * us + ca * uh))
+    return (H[0] + L1 * (ca * us - bend * sa * uh), H[1] + L1 * (sa * us + bend * ca * uh))
 
 
-def _rider(m, base, fwd, up, lat, theta, kit, pov=False) -> None:
-    """Bici + atleta: cuadro, aros, pedalada (dos piernas), torso, brazos y casco.
+
+def _rider(m, base, fwd, up, lat, theta, roll, kit, pov=False) -> None:
+    """Bici + atleta: cuadro, aros con radios, pedalada, brazos con codo y casco.
 
     El marco local es (avance, altura, lateral) apoyado en la superficie peraltada.
     En primera persona (`pov`) solo se dibuja la bici, el pedal y las manos: el cuerpo
     quedaria entre la camara (en el casco) y el cuadro.
+
+    `theta` es el angulo de la biela y `roll` el de la rueda (rodar = distancia / radio):
+    los radios giran a la velocidad real y se paran cuando se para el rider, igual que la
+    pedalada. Las secciones de 6 caras son lo que hace que un brazo se lea como volumen y
+    no como una tarjeta plana.
     """
     def P(s, h, w=0.0):
         return (base[0] + fwd[0] * s + up[0] * h + lat[0] * w,
@@ -438,41 +730,61 @@ def _rider(m, base, fwd, up, lat, theta, kit, pov=False) -> None:
 
     saddle = (HIP[0], HIP[1] + 0.05)
 
+    # Sombra de contacto: parches bajo las dos ruedas y bajo el rider. Sin anclaje al suelo
+    # la bici flota y el cuadro parece de juguete; un disco grande se lee como una mancha.
+    for c in (REAR, FRONT):
+        m.plate(P(c[0], 0.006), 0.13, tuple(up), SHADOW, 10, 0.0)
+    m.plate((base[0], base[1], base[2] + 0.006), 0.19, tuple(up), SHADOW, 10, 0.0)
+
     for a, b, r in (((0.0, BB_H), saddle, 0.018), ((0.0, BB_H), HTUBE, 0.022),
                     (saddle, HTUBE, 0.015), (HTUBE, FRONT, 0.017),
                     ((0.0, BB_H), REAR, 0.015), (saddle, REAR, 0.012),
                     (HTUBE, BAR, 0.017)):
-        m.segment(P(a[0], a[1]), P(b[0], b[1]), r, FRAME, 0.15)
+        m.segment(P(a[0], a[1]), P(b[0], b[1]), r, FRAME, 0.15, sides=6)
+    m.plate(P(saddle[0], saddle[1]), 0.10, tuple(up), FRAME, 8, 0.15)          # sillin
+    m.plate(P(0.0, BB_H), 0.115, tuple(lat), RIM, 12, 0.15)                   # plato
+
     for c in (REAR, FRONT):
-        m.wheel(P(c[0], c[1]), WR, fwd, up, lat, TIRE, 0.03, 16, 0.12)
         p = P(c[0], c[1])
-        m.box(p[0], p[1], p[2], 0.06, 0.06, 0.06, RIM, 0.0, 0.2)
+        m.wheel(p, WR, fwd, up, lat, TIRE, 0.05, 18, 0.12)
+        m.wheel(p, WR - 0.030, fwd, up, lat, RIM, 0.012, 18, 0.18)     # llanta: sin ella el aro es solo negro
+        m.plate(p, 0.075, tuple(lat), RIM, 10, 0.2)                            # buje
+        for k in range(6):                                                     # radios
+            m.spoke(p, WR, fwd, up, lat, roll + 2 * math.pi * k / 6.0, RIM, 0.012, 0.14)
 
     for side in (1.0, -1.0):
         ph = theta if side > 0 else theta + math.pi
         foot = (CRANK * math.cos(ph), BB_H + CRANK * math.sin(ph))
-        m.segment(P(0.0, BB_H, 0.06 * side), P(foot[0], foot[1], 0.06 * side), 0.014, RIM, 0.2)
-        kn = _knee(HIP, foot, THIGH, SHIN)
+        m.segment(P(0.0, BB_H, 0.06 * side), P(foot[0], foot[1], 0.06 * side), 0.014, RIM, 0.2, sides=6)
+        kn = _knee(HIP, foot, THIGH, SHIN, 1.0)
+        el = _knee(SHO, BAR, ARM_U, ARM_F, -1.0)
         if not pov:
-            m.segment(P(HIP[0], HIP[1], 0.06 * side), P(kn[0], kn[1], 0.07 * side), 0.065, SKIN, 0.2)
-            m.segment(P(kn[0], kn[1], 0.07 * side), P(foot[0], foot[1], 0.075 * side), 0.048, SKIN, 0.2)
-            m.segment(P(SHO[0], SHO[1], 0.07 * side), P(BAR[0], BAR[1], 0.05 * side), 0.040, SKIN, 0.2)
+            m.segment(P(HIP[0], HIP[1], 0.06 * side), P(kn[0], kn[1], 0.07 * side), 0.075, SKIN, 0.2, sides=6)
+            m.segment(P(kn[0], kn[1], 0.07 * side), P(foot[0], foot[1], 0.075 * side), 0.055, SKIN, 0.2, sides=6)
+            m.segment(P(SHO[0], SHO[1], 0.075 * side), P(el[0], el[1], 0.06 * side), 0.050, SKIN, 0.2, sides=6)
+            m.segment(P(el[0], el[1], 0.06 * side), P(BAR[0], BAR[1], 0.05 * side), 0.042, SKIN, 0.2, sides=6)
         p = P(foot[0], foot[1], 0.075 * side)
         m.box(p[0], p[1], p[2], 0.28, 0.11, 0.07, SHOE, 0.0, 0.15)              # zapatilla
         h = P(BAR[0], BAR[1], 0.05 * side)
         m.box(h[0], h[1], h[2], 0.11, 0.09, 0.06, SKIN, 0.0, 0.25)              # mano en el manillar
     if not pov:
-        m.segment(P(HIP[0], HIP[1]), P(SHO[0], SHO[1]), 0.100, kit, 0.35)        # torso
-        m.segment(P(SHO[0], SHO[1]), P(HEAD[0], HEAD[1]), 0.050, SKIN, 0.25)     # cuello
-        p = P(HEAD[0], HEAD[1])
-        m.box(p[0], p[1], p[2], 0.22, 0.19, 0.13, HELMET, 0.0, 0.3)
+        mid = ((HIP[0] + SHO[0]) / 2.0, (HIP[1] + SHO[1]) / 2.0)
+        m.segment(P(HIP[0], HIP[1]), P(mid[0], mid[1]), 0.105, kit, 0.35, sides=6)     # cadera
+        m.segment(P(mid[0], mid[1]), P(SHO[0], SHO[1]), 0.095, kit, 0.35, sides=6)     # espalda
+        # Hombros y cadera en cruz: sin ese ancho el atleta es una linea y de canto se lee
+        # como una tarjeta, que era el problema del placeholder.
+        m.segment(P(SHO[0], SHO[1], 0.075), P(SHO[0], SHO[1], -0.075), 0.055, kit, 0.30, sides=6)
+        m.segment(P(HIP[0], HIP[1], 0.06), P(HIP[0], HIP[1], -0.06), 0.075, kit, 0.30, sides=6)
+        m.segment(P(SHO[0], SHO[1]), P(HEAD[0] - 0.06, HEAD[1] - 0.04), 0.050, SKIN, 0.25, sides=6)
+        m.segment(P(HEAD[0] - 0.08, HEAD[1] - 0.05), P(HEAD[0] + 0.12, HEAD[1] + 0.03),
+                  0.108, HELMET, 0.30, sides=6)                                       # casco aerodinamico
 
 
 def scene_pista(snap, anim, aspect=1.6):
     """Pista de 400 m a escala real (1 unidad = 1 m): dos rectas, dos curvas peraltadas.
 
-    Lo fijo (pista, lineas de calles, kerb, meta y suelo del estadio) se construye una
-    vez y se conserva como capa estatica; por frame solo cambian el rider, la estela y
+    Lo fijo (tablon, lineas pintadas, meta, muro, gradas, cerchos y lamparas) se construye
+    una vez y se conserva como capa estatica; por frame solo cambian el rider, la estela y
     la camara chase (1 persona, estilo juego de carreras, distancia configurable).
     """
     pts = anim.get("pts")
@@ -508,6 +820,9 @@ def scene_pista(snap, anim, aspect=1.6):
         anim["frac"] = (anim["frac"] + anim["v"] * anim["dt"] / TRACK_LEN) % 1.0
     anim["anchor"] = frac
     anim["crank"] = anim["crank"] + (anim["c"] / 60.0) * 2 * math.pi * anim["dt"]
+    # La rueda gira por distancia recorrida (theta = arco / radio), no por la cadencia:
+    # asi los radios se paran cuando el rider se queda, no siguen contando pedaladas.
+    anim["roll"] = anim["roll"] + anim["v"] * anim["dt"] / WR
 
     col = _hex(snap.get("zone_color") or "#22d3ee")
     bx, by, btx, bty, bank = _at(pts, anim["frac"])
@@ -518,32 +833,41 @@ def scene_pista(snap, anim, aspect=1.6):
     up = (-nx * sb, -ny * sb, cb)                          # normal del plano inclinado
     lat = (nx * cb, ny * cb, sb)                           # lateral sobre la superficie
     fwd = (fx, fy, 0.0)
-    base = (bx + nx * Q_RIDER, by + ny * Q_RIDER, math.tan(bank) * (Q_RIDER + HALF_W))
+    base = (bx + nx * Q_RIDER, by + ny * Q_RIDER, DECK + math.tan(bank) * (Q_RIDER + HALF_W))
     # Estela por posiciones reales: al pararse deja de crecer y se desvanece (no avanza
-    # por detrás de un rider que ya esta quieto).
+    # por detrás de un rider que ya esta quieto). Es una pegatina sobre el madera, no una
+    # caja flotando 2 cm encima, que era lo que la hacía leer como basura.
     tr = anim["trail"]
     if not tr or math.hypot(base[0] - tr[-1][1][0], base[1] - tr[-1][1][1]) >= 0.05:
         tr.append((anim["t"], base))
     while tr and (anim["t"] - tr[0][0] > TRAIL_T or len(tr) > 24):
         tr.pop(0)
-    for tt, p in tr:
+    for j, (tt, p) in enumerate(tr):
+        if j > len(tr) - 4:
+            continue                       # las muestras recientes caen justo bajo el rider
         fade = max(0.12, 1.0 - (anim["t"] - tt) / TRAIL_T)
-        m.box(p[0], p[1], p[2] + 0.02, 0.30, 0.30, 0.04,
-              tuple(c * (0.15 + 0.85 * fade) for c in col))
+        m.plate((p[0], p[1], p[2] + 0.006), 0.16, tuple(up),
+                tuple(c * (0.15 + 0.85 * fade) for c in col), 8, 0.30)
 
     dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
     pov = dist < 0.5
-    _rider(m, base, fwd, up, lat, anim["crank"], col, pov=pov)
-    # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici;
-    # al cerrar el zoom sube al casco (primera persona). Alturas medidas en `up`.
-    k = min(1.0, max(0.0, (dist - ZOOM_MIN) / 0.6))
-    # open angular: con 0,62 la bici quedaba fuera del cuadro a 2,4 m. En primera persona
-    # hace falta mas angular y mas pitch para ver manillar y rueda delante de la mira.
-    fovy = 1.00 + 0.30 * (1.0 - k)
-    pitch = 0.50 - 0.35 * k
-    eh = HEAD[1] + 0.03 + 0.35 * k
-    ahead = max(4.0, dist * 1.9)
-    s0 = HEAD[0] if pov else -dist
+    _rider(m, base, fwd, up, lat, anim["crank"], anim["roll"], col, pov=pov)
+    if pov:
+        # 1a persona: la camara esta dentro del casco (a la altura de los ojos, no de la
+        # cumbrera) y mira unos 31 grados hacia abajo, que es lo que mete manillar y rueda
+        # delantera en el cuadro. Con el pitch del chase la bici queda fuera del encuadre.
+        fovy, pitch, eh, s0, ahead = 1.22, 0.55, 1.15, HEAD[0] - 0.05, 3.2
+    else:
+        # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici;
+        # al cerrar el zoom sube al casco (primera persona). Alturas medidas en `up`.
+        k = min(1.0, max(0.0, (dist - ZOOM_MIN) / 0.6))
+        # open angular: con 0,62 la bici quedaba fuera del cuadro a 2,4 m. En primera persona
+        # hace falta mas angular y mas pitch para ver manillar y rueda delante de la mira.
+        fovy = 1.00 + 0.30 * (1.0 - k)
+        pitch = 0.50 - 0.30 * k
+        eh = HEAD[1] + 0.03 + 0.40 * k
+        ahead = max(4.0, dist * 1.9)
+        s0 = -dist
     eye = tuple(base[j] + fwd[j] * s0 + up[j] * eh for j in range(3))
     center = tuple(base[j] + fwd[j] * (s0 + ahead) + up[j] * (eh - ahead * pitch) for j in range(3))
     return layers + [("frame", m)], (eye, center, (0.0, 0.0, 1.0), fovy, 300.0)
@@ -645,7 +969,7 @@ def _split_rect(view, i, n):
 
 def _new_anim():
     return {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0,
-            "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0, "crank": 0.0,
+            "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0, "crank": 0.0, "roll": 0.0,
             "trail": [], "pts": None, "static": None, "anchor": None}
 
 
@@ -830,6 +1154,11 @@ def child_main() -> None:
                 far = cam[4] if len(cam) > 4 else 80.0     # la pista necesita mas fondo
                 mvp = perspective(fovy, vw / vh, 0.1, far) @ look_at(eye, center, up)
                 prog["mvp"].write(np.ascontiguousarray(mvp.T, dtype="f4").tobytes())
+                try:
+                    # EYE: el brillo y la niebla del pabellon se calculan desde la camara.
+                    prog["EYE"].write(np.asarray(eye, dtype="f4").tobytes())
+                except Exception:  # noqa: BLE001 - program sin ese uniform (shader antiguo)
+                    pass
                 for va in vaos.values():
                     va.render(moderngl.TRIANGLES)
                 glfw.swap_buffers(win)

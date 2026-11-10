@@ -38,6 +38,33 @@ trabajo: se actualiza con cada fase y se commita junto con el codigo que la impl
    Blender y su pipeline de importacion.
 4. Render en vivo con telemetria y parada realista antes de meta — **hecha** (inercia de
    velocidad y cadencia, estela por posiciones reales).
+5. Estetica de velodromo — **hecha** sobre referencias fotograficas (Calshot y Forest City):
+   tablon de pino ambarino con juntas, lineas pintadas UCI, meta al final de la recta, muro
+   perimetral, gradas escalonadas, cerchos con lamparas calidas, transicion de peralte suave,
+   luz calida de dos fuentes + ambiente hemisferico + niebla, charco de luz horneado por
+   vertice y sombra de contacto. Pendiente: veta de tablon por textura (ahora es tono por banda)
+   y sombras reales.
+
+## Motor de render: hace falta Unity?
+
+**No.** Lo que hacia bajar el nivel no era el motor, eran material, luz y composicion, y todo eso
+se hace en moderngl (el pipeline actual) sin dependencias nuevas:
+
+- Lo que se ha ganado sin motor: material de madera con tono por tablon, dos luces calidas +
+  ambiente hemisferico + especular, niebla de pabellon, charco de luz horneado por vertice,
+  geometria de recinto (muro, gradas, cerchos, lamparas), proporciones reales y encuadre.
+- Lo que solo da un motor y hoy no hace falta: PBR, sombras en tiempo real, post-proceso
+  (bloom, DOF, tonemapping), importacion de assets y rig animado, y fisica.
+- Lo que se puede hacer en moderngl cuando haga falta, sin cambiar de motor: texturas
+  procedurales (moderngl admite texturas desde bytes, sin PIL), un shadow map de una luz, y un
+  loader de glTF para el atleta de Blender. Es el camino natural del plan.
+
+Unity no encaja con la arquitectura del proyecto: el render es un **proceso hijo** de Python con
+una tuberia de JSON a 1 Hz, sin tests ni ventana de control, la TUI es la dueña del teclado, y la
+validacion es offscreen. Meter Unity significa un segundo runtime con su propio ciclo, licencia,
+empaquetado, y perder la validacion headless y el fallback "la TUI sigue en 2D si el 3D falla".
+Si en algun momento se quisiera motor, el criterio seria: solo si se necesitan sombras reales +
+post-proceso + assets importados, y entonces como proceso aparte con el mismo protocolo JSON.
 
 ## Bug encontrado (fix aplicado)
 
@@ -46,6 +73,11 @@ trabajo: se actualiza con cada fase y se commita junto con el codigo que la impl
   `UnresolvedVariableError` -> la app crasheaba. Cambiado a `border: round #ef4444` (literal,
   como `#err`).
 - `p` solo actua si no hay modal abierto (con modal, la tecla va al `Input`).
+- Las bandas de tablones y las lineas pintadas se apoyaban en el mismo plano que la capa base:
+  el z-buffer elige al azar entre dos poligonos coplanares -> la pista salia con **manchas**
+  (z-fighting). Solucion: `lift` de 4..12 mm en `_surf`/`ribbon`. Con color por vertice
+  (`vquad`) la gradacion del charco de luz es suave; con un color por cuadro salia en
+  "ladrillos" (una linea cada metro de cuerda).
 
 ## Estado de la implementacion
 
@@ -105,6 +137,20 @@ trabajo: se actualiza con cada fase y se commita junto con el codigo que la impl
   1 marca.
 - El circuito siempre mide 400 m: la posicion del rider es `dist_km*1000 % 400` (el odometro
   real), no `lap_frac`, que sigue usandose solo en la vista `pista` de la TUI.
+- Estetica de velodromo (fase 5): paleta **medida de las fotos de referencia** (madera #9d7143,
+  cote d'azur #37537c, rojo #ae2824, azul #3b5e87, butacas #283241). Lo que se añadio:
+  tablon con junta, lineas UCI en sus distancias reales (azul 0,10 m, negra 0,24, roja 0,94,
+  azul del stayer 4,30, borde blanco), meta al final de la recta de meta, muro perimetral con el
+  tablon elevado 1,05 m sobre el piso, gradas de 11 filas escalonadas con bloques de color y
+  pasillos, cerchos + lamparas calidas, y transicion de peralte con coseno. La luz es dos fuentes
+  (calida 0,95 + relleno frio 0,19) + ambiente hemisferico + especular + niebla; el charco de luz
+  se hornea por vertice (`tint`) porque el programa no tiene luces puntuales. Paso del trazado
+  2 m -> 1 m: con 2 m las bandas estrechas serruchaban en las curvas. Coste: 73.172 tris
+  estaticos (se suben una vez) y ~730 por frame; medido en el proceso real 45,5 fps / 5,6 ms.
+- Camara en 1a persona separada del chase: ojo a 1,15 m (altura de los ojos, no de la cumbrera
+  del casco) y pitch 0,55 rad; con el pitch del chase el manillar y la rueda delantera salian
+  fuera del encuadre. El `roll` de la rueda gira por distancia recorrida (arco/radio), no por
+  cadencia, asi que los radios se paran cuando para el rider.
 
 ## Proximos pasos
 
@@ -114,16 +160,25 @@ trabajo: se actualiza con cada fase y se commita junto con el codigo que la impl
    frame; mientras, el atleta es procedural (cajas + prismas).
 3. Input por vista: la rueda ya actua sobre la vista bajo el cursor; si se añaden teclas por
    vista hace falta enfocar la ventana (ahora la TUI es la dueña del teclado).
-4. Faltan en la pista: calles marcadas en el asfalto, curva con radio variable tipo Monaco
-   (ahora las dos curvas son semicirculos de 36 m) y una zona de boxes/entrada, si se quiere
-   que el rider entre y salga del trazado.
+4. Faltan en la pista: curva con radio variable tipo Monaco (ahora las dos curvas son
+   semicirculos de 36 m) y una zona de boxes/entrada, si se quiere que el rider entre y salga
+   del trazado. La veta del madera ahora es tono por banda; el siguiente paso es textura
+   procedural (moderngl admite texturas desde bytes, sin PIL) y un fillet en la transicion
+   plano->peralte, que en las fotos es curvo, no angular.
+5. Sombras: hoy es un parche de contacto bajo las ruedas. Si se quieren sombras reales hace
+   falta un shadow map de una luz (se puede en moderngl); no hace falta motor.
 
 ## Como se verifica
 
 - Harnesses offscreen (fuera del repo, en el directorio de sesiones): `rider_check.py`
   (encuadre y cacheo de capa estatica), `stop_check.py` (inercia y estela), `split_check.py`
-  (cada vista en su rectangulo, `far` por vista). Nota headless: con `os.set_blocking(False)`
-  sobre un stdout en modo texto, `readline()` levanta `BlockingIOError` en lugar de devolver
+  (cada vista en su rectangulo, `far` por vista), `aesthetics_check.py` (before/after de la fase
+  5: renderiza `pista` con ventana invisible, escribe PNG sin PIL y reporta tris estaticos y de
+  frame; con `WARM=n` repite `scene_pista` para poblar la estela) y `fps_check.py` (proceso real
+  con la tuberia abierta para que reporte fps). Dos cosas del harness: `screen.read()` en macOS
+  devuelve el framebuffer con content scale 2 (2000x1250 para una ventana de 1000x625) y hay que
+  deducir el tamano del propio read; y `readline()` sobre un stdout no bloqueante levanta
+  `BlockingIOError` en lugar de devolver
   `None`; hay que capturarla o el script cuelga.
 - Proceso real: una linea JSON por stdin, mensajes `win`/`err`/`fps` por stdout; se comprueba
   que el layout cambia on the fly, que sale con exit 0 y que no quedan procesos huerfanos.
