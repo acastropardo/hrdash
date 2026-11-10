@@ -1069,7 +1069,15 @@ def child_main() -> None:
         mons = [m for m in (glfw.get_monitors() or []) if m]
         zoom = {}                      # vista -> distancia de camara (la rueda la cambia)
         look = {}                      # vista -> (yaw, tilt) de la orbita (el arrastre la mueve)
-        press = {}                     # id(ventana) -> punto donde empezo el arrastre
+        press = {}                     # winkey(ventana) -> punto donde empezo el arrastre
+        focus = {}                     # winkey(ventana) -> enfocada (sin foco no llegan teclas)
+        # Teclas reenviadas a la TUI: la TUI es la dueña de los bindings, aqui solo se traduce el
+        # codigo de GLFW al nombre que la TUI usa, para no duplicar la tabla de acciones.
+        KEYNAMES = {glfw.KEY_Q: "q", glfw.KEY_X: "x", glfw.KEY_S: "s", glfw.KEY_C: "c",
+                    glfw.KEY_H: "h", glfw.KEY_W: "w", glfw.KEY_G: "g", glfw.KEY_P: "p",
+                    glfw.KEY_3: "3", glfw.KEY_R: "r",
+                    glfw.KEY_LEFT: "left", glfw.KEY_RIGHT: "right",
+                    glfw.KEY_LEFT_BRACKET: "[", glfw.KEY_RIGHT_BRACKET: "]"}
         slots: list = []
 
         def winkey(win):
@@ -1148,11 +1156,28 @@ def child_main() -> None:
                     look[s[0]] = [0.0, 0.0]
                     return
                 try:
-                    press[id(win)] = glfw.get_cursor_pos(win)      # las ventanas no son hashables
+                    press[winkey(win)] = glfw.get_cursor_pos(win)   # la ventana no es hashable
                 except Exception:  # noqa: BLE001 - ventana cerrada durante el click
                     pass
             elif action == RELEASE:
-                press.pop(id(win), None)
+                press.pop(winkey(win), None)
+
+        def on_key(win, key, _scan, action, _mods):
+            """Tecla: se reenvia a la TUI, que es la dueña de los bindings.
+
+            GLFW solo entrega teclas a la ventana enfocada, y cuando la ventana 3D esta enfocada el
+            terminal deja de recibirlas: por eso el reenvio es lo que hace que `q`, `x`, `p` o `r`
+            funcionen desde la ventana. Sin foco no llega nada. Se reenvia solo PRESS: con REPEAT la
+            TUI recibiria una accion por cada repeticion del teclado.
+            """
+            if action != PRESS:
+                return
+            name = KEYNAMES.get(key)
+            if name:
+                _emit({"key": name})
+
+        def on_focus(win, focused):
+            focus[winkey(win)] = bool(focused)
 
         def on_scroll(win, dx, dy):
             """Rueda/touchpad: `dy` es zoom, `dx` es la orbita horizontal.
@@ -1173,10 +1198,17 @@ def child_main() -> None:
                 add_look(win, STEP_LOOK_SCROLL * float(dx), 0.0)
 
         def bind(win):
-            """Los tres callbacks de la ventana: zoom, orbita y centrar."""
+            """Los callbacks de la ventana: zoom, orbita, centrar, teclas y foco."""
             glfw.set_scroll_callback(win, on_scroll)
             glfw.set_cursor_pos_callback(win, on_move)
             glfw.set_mouse_button_callback(win, on_button)
+            glfw.set_key_callback(win, on_key)
+            glfw.set_window_focus_callback(win, on_focus)
+            try:
+                glfw.focus_window(win)          # sin foco no llega ni una tecla ni un clic
+            except Exception:  # noqa: BLE001 - enfocar es decorativo
+                pass
+            focus.setdefault(winkey(win), False)
 
         def open_windows(views):
             """(view, window, rect, ctx, prog, anim, vaos): una ventana por monitor o split."""
@@ -1309,7 +1341,8 @@ def child_main() -> None:
                 _emit({"fps": round(frames / max(1e-6, now - report_t), 1),
                        "ms": round(1000 * work / max(1, frames), 1),
                        "dist": {v: round(z, 3) for v, z in zoom.items()},
-                       "look": {v: [round(y, 3), round(t, 3)] for v, (y, t) in look.items()}})
+                       "look": {v: [round(y, 3), round(t, 3)] for v, (y, t) in look.items()},
+                       "focus": {s[0]: bool(focus.get(winkey(s[1]))) for s in slots}})
                 frames, report_t, work = 0, now, 0.0
             work += time.time() - t0
             time.sleep(max(0.0, 0.02 - (time.time() - t0)))
@@ -1439,8 +1472,9 @@ class GLHost:
             self.error = f"3D push: {type(exc).__name__}"[:90]
             self.stop()
 
-    def poll_error(self) -> str:
-        """Lee sin bloquear lo que la ventana haya reportado por stdout."""
+    def drain(self) -> list:
+        """Lee sin bloquear lo que la ventana haya reportado (errores, teclas, foco, camara)."""
+        msgs = []
         if self._out is not None:
             try:
                 import json
@@ -1448,8 +1482,10 @@ class GLHost:
                 while line:
                     try:
                         got = json.loads(line)
-                        if isinstance(got, dict) and got.get("err"):
-                            self.error = str(got["err"])[:90]
+                        if isinstance(got, dict):
+                            msgs.append(got)
+                            if got.get("err"):
+                                self.error = str(got["err"])[:90]
                     except Exception:  # noqa: BLE001
                         pass
                     line = self._out.readline()
@@ -1457,6 +1493,11 @@ class GLHost:
                 pass
         elif self._proc is not None and not self.alive():
             self.error = self.error or "la ventana 3D murio al arrancar"
+        return msgs
+
+    def poll_error(self) -> str:
+        """Lo de siempre: leer y quedarse con el error."""
+        self.drain()
         return self.error
 
     def stop(self) -> None:

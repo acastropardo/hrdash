@@ -47,6 +47,9 @@ trabajo: se actualiza con cada fase y se commita junto con el codigo que la impl
 6. Camara orbitable con raton/touchpad — **hecha** (arrastre con boton = yaw/tilt, dos dedos en
    horizontal = yaw, clic derecho = centrar). Falta confirmar con raton y trackpad fisicos: los
    callbacks se comprueban inyectando eventos sinteticos, no con el gesto real.
+7. Teclas escritas en la ventana 3D — **hecha** (el proceso hijo reenvia la pulsacion a la TUI, que
+   es la dueña de los bindings; no se duplica la tabla de acciones). Con modal abierto no se simula,
+   coincide con la regla de `p`. Falta confirmar con teclado real.
 
 ## Motor de render: hace falta Unity?
 
@@ -93,6 +96,10 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
 - El topete se aplica sobre el valor nuevo, no sobre el actual: si el tilt ya estaba en el topete,
   comprobar antes de sumar permitia seguir empujando y el valor se salia (la camara se quedaba
   pegada arriba, sin poder volver).
+- El ancla del arrastre se guardaba con `id(ventana)` y se leia con `winkey(ventana)`: son claves
+  distintas para un `c_void_p` (el `value` del puntero no es su `id`), asi que el gesto solo
+  funcionaba cuando coincidian. Ahora todo el camino del arrastre usa `winkey()`. Ademas, sin el
+  `RELEASE` el ancla sobrevivia y cualquier movimiento suelto del cursor seguia orbitando.
 
 ## Estado de la implementacion
 
@@ -188,6 +195,17 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   `v15_low.png` (tilt -0,45, el guard mantiene el ojo sobre el tablon) y `v15_pov.png` (giro de
   cabeza). El render neutro con look [0,0] es byte-identico a `v14_curve.png` -> no hay regresion
   de encuadre. Hint de la TUI: `r: race (rueda: zoom, arrastre: orbita)`.
+- Teclas desde la ventana (`on_key` + `App.simulate_key`): el hijo no tiene acciones propias, solo
+  traduce el codigo de GLFW al nombre que la TUI usa (`KEYNAMES`) y reenvia **solo PRESS** (con
+  REPEAT la TUI recibiria una accion por cada repeticion del teclado). La TUI lo ejecuta con
+  `simulate_key`, y con modal abierto lo ignora (la tecla real iria al `Input`). El foco es el
+  condicionante: GLFW solo entrega teclas y clics a la ventana enfocada, y cuando la ventana los
+  recibe el terminal deja de recibirlos, asi que el reenvio es el unico camino. Se pide el foco al
+  crear la ventana (`focus_window`) y el estado se reporta en el mensaje de fps (`focus`), por eso se
+  comprueba sin teclado. En el proceso real la ventana nace sin foco (el script no es la app activa de
+  MacOS): hasta clicar la ventana no llega nada, y eso se avisa en la linea de ayuda. El lector de la
+  tuberia lee todos los mensajes, no solo el error (`GLHost.drain()`), y los drains a 10 fps: una tecla
+  no puede esperar al tick de datos de 1 Hz.
 
 ## Proximos pasos
 
@@ -225,7 +243,13 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   mover -> [0,0]; arrastre -> `STEP_LOOK * delta`; clic derecho -> centrado; scroll horizontal ->
   `STEP_LOOK_SCROLL * dx`; scroll vertical -> zoom; empujar el tilt 100 veces -> se queda en el
   topete. El gesto real no se puede confirmar con un raton o un trackpad fisicos (y el arrastre
-   exige que la ventana este enfocada), solo con esta via.
+  exige que la ventana este enfocada), solo con esta via.
+- `key_check.py` (teclas sin teclado real): se registran los setters de callback y el harness invoca
+  `on_key` con teclas inventadas. Comprueba que `PRESS` reenvia y `REPEAT` no, que una tecla no ligada
+  no emite, que los nombres reenviados estan dentro de los `BINDINGS` de la TUI, y que el foco se pide
+  al crear la ventana. `ui_key_check.py` cubre el lado TUI con `run_test()` (sin TTY): tecla reenviada
+  ejecutada, ignorada con modal, aviso de sin foco y lector que falla sin tumbar el muestreo. El bloque
+  7 de `look_check.py` comprueba el ancla: tras el `RELEASE` un movimiento suelto del cursor no orbita.
 - Proceso real: una linea JSON por stdin, mensajes `win`/`err`/`fps` por stdout; se comprueba
   que el layout cambia on the fly, que sale con exit 0 y que no quedan procesos huerfanos.
 - TUI: `3` y `r` (toggles independientes), `p` intacto, `x` reset, `c` abre el modal sin crash.

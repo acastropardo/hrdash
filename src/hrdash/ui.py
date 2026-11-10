@@ -216,6 +216,7 @@ class HRDash(App):
         self.gl_views: list[str] = []   # vistas 3D activas: "gauge" (dashboard) y "pista" (race)
         self._glhost: GLHost | None = None
         self._gl_msg = ""         # aviso de la ventana 3D (cerrada / sin dependencias)
+        self._gl_focus: dict = {}   # vista -> ventana enfocada (sin foco no llegan teclas ni clics)
         self._beat_t0 = time.time()
         self._beat_period = 1.0
         self._heart_lvl = -1      # ultimo nivel dibujado (evita redibujos)
@@ -267,6 +268,7 @@ class HRDash(App):
         self.set_interval(0.1, self._tick_heart)   # corazon a 10 fps, independiente del dato
         self.set_interval(0.1, self._tick_gauges)  # agujas a 10 fps (solo en vista tablero)
         self.set_interval(0.1, self._tick_pista)   # marcador de la bici a 10 fps
+        self.set_interval(0.1, self._check_gl)     # teclas de la ventana: no pueden esperar al tick
         self.query_one("#hints", Static).update(hints_text(self.view))
         self.refresh_all()
 
@@ -455,26 +457,72 @@ class HRDash(App):
         """Si la ventana murio (cierre del usuario o fallo GL), se vuelve a 2D solos."""
         if not (self.gl and self._glhost is not None):
             return
-        err = self._glhost.poll_error()
+        try:
+            msgs = self._glhost.drain()
+        except Exception as exc:  # noqa: BLE001 - el lector de la tuberia no debe tumbar la app
+            self._gl_msg = f"3D drain: {type(exc).__name__}"[:80]
+            self._kill_gl()
+            self._hints()
+            return
+        err = self._glhost.error
         if err:
             self._gl_msg = err
             self._kill_gl()
             self._hints()
-        elif not self._glhost.alive():
+            return
+        if not self._glhost.alive():
             self._gl_msg = "ventana 3D cerrada"
             self._kill_gl()
             self._hints()
+            return
+        changed = False
+        for m in msgs:
+            key = m.get("key")
+            if key:
+                self._gl_key(str(key))
+            focus = m.get("focus")
+            if isinstance(focus, dict):
+                got = {str(k): bool(v) for k, v in focus.items()}
+                if got != self._gl_focus:
+                    self._gl_focus = got
+                    changed = True
+        if changed:
+            self._hints()
+
+    def _gl_key(self, key: str) -> None:
+        """Tecla escrita en la ventana 3D: se ejecuta como si se pulsara en el terminal.
+
+        Con modal abierto la tecla real iria al `Input`, asi que desde la ventana no se simula:
+        coincide con la regla de `p` (solo actua sin modal). Hace falta que la ventana este
+        enfocada, porque cuando ella tiene el foco el terminal deja de recibir teclas: por eso el
+        reenvio del proceso hijo es el unico camino.
+        """
+        if isinstance(self.screen, ModalScreen):
+            return
+        try:
+            self.simulate_key(key)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _kill_gl(self) -> None:
         self.gl = False
         self.gl_views = []
+        self._gl_focus = {}
         if self._glhost is not None:
             self._glhost.stop()
             self._glhost = None
 
+    def _gl_note(self) -> str:
+        """Aviso de la ventana: el error, o que esta abierta pero sin foco (teclas y raton no llegan)."""
+        if self._gl_msg:
+            return self._gl_msg
+        if self.gl and self._gl_focus and not any(self._gl_focus.values()):
+            return "3D sin foco: clica la ventana para teclas y raton"
+        return ""
+
     def _hints(self) -> None:
         try:
-            self.query_one("#hints", Static).update(hints_text(self.view, self._gl_msg))
+            self.query_one("#hints", Static).update(hints_text(self.view, self._gl_note()))
         except Exception:  # noqa: BLE001 - la linea de ayuda no debe tumbar la app
             pass
 
