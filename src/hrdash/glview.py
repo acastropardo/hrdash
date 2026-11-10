@@ -51,6 +51,9 @@ GRID = (0.19, 0.22, 0.27)
 ASPHALT = (0.17, 0.18, 0.21)
 EDGE = (0.62, 0.66, 0.70)
 META = (0.90, 0.92, 0.95)
+CHASE_DIST = 2.4                    # chase por defecto; la rueda acerca hasta primera persona
+ZOOM_MIN, ZOOM_MAX = 0.20, 6.0
+STEP_ZOOM = 0.18                    # salto por notch de rueda
 ZCOLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
 
 A0, SWEEP = 225.0, 270.0            # barrido del dial (igual que gauges.py)
@@ -353,14 +356,18 @@ def scene_pista(snap, anim, aspect=1.6):
     bl = math.hypot(btx, bty) or 1.0
     fx, fy = btx / bl, bty / bl
     yaw = math.atan2(bty, btx)
-    # la bici: bicho + bulto del ciclista, para que se lea como un rider
-    m.box(bx, by, 0.14, 0.50, 0.22, 0.20, col, yaw=yaw, light=0.4)
-    m.box(bx + fx * 0.10, by + fy * 0.10, 0.34, 0.20, 0.16, 0.22, (0.85, 0.88, 0.92),
-          yaw=yaw, light=0.3)
-    # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici
-    dist = 2.4
-    eye = (bx - fx * dist, by - fy * dist, 0.55)
-    center = (bx + fx * 1.6, by + fy * 1.6, 0.22)
+    dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
+    if dist > 0.45:                # en primera persona el bulto taparia el cuadro
+        # la bici: bicho + bulto del ciclista, para que se lea como un rider
+        m.box(bx, by, 0.14, 0.50, 0.22, 0.20, col, yaw=yaw, light=0.4)
+        m.box(bx + fx * 0.10, by + fy * 0.10, 0.34, 0.20, 0.16, 0.22, (0.85, 0.88, 0.92),
+              yaw=yaw, light=0.3)
+    # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici;
+    # al cerrar el zoom baja a la altura de la cabeza (primera persona)
+    ez = 0.55 if dist >= 0.8 else 0.68
+    cz = 0.22 if dist >= 0.8 else 0.34
+    eye = (bx - fx * dist, by - fy * dist, ez)
+    center = (bx + fx * max(1.6, dist * 1.2), by + fy * max(1.6, dist * 1.2), cz)
     return [("frame", m)], (eye, center, (0.0, 0.0, 1.0), 0.62)
 
 
@@ -498,6 +505,36 @@ def child_main() -> None:
         glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE)
         glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
         mons = [m for m in (glfw.get_monitors() or []) if m]
+        zoom = {}                      # vista -> distancia de camara (la rueda la cambia)
+        slots: list = []
+
+        def view_under(win):
+            """Vista bajo el cursor: en split hay varias vistas en la misma ventana."""
+            mine = [s for s in slots if s[1] is win]
+            if len(mine) == 1:
+                return mine[0][0]
+            try:
+                px, py = glfw.get_cursor_pos(win)
+                wpts, hpts = glfw.get_window_size(win)
+                if not wpts or not hpts:
+                    return mine[0][0]
+                nx, ny = px / float(wpts), 1.0 - py / float(hpts)   # rects: origen abajo-izq
+                for v, _w, r, _c, _p, _a, _va in mine:
+                    if r[0] <= nx < r[0] + r[2] and r[1] <= ny < r[1] + r[3]:
+                        return v
+            except Exception:  # noqa: BLE001 - sin cursor: la primera vista de la ventana
+                pass
+            return mine[0][0] if mine else None
+
+        def on_scroll(win, _dx, dy):
+            """Rueda: acerca/aleja la camara de la vista apuntada (chase <-> 1a persona)."""
+            v = view_under(win)
+            if v is None:
+                return
+            z = min(ZOOM_MAX, max(ZOOM_MIN, zoom.get(v, CHASE_DIST) + STEP_ZOOM * float(dy)))
+            if z != zoom.get(v, CHASE_DIST):
+                zoom[v] = z
+                _emit({"zoom": {v: round(z, 3)}})
 
         def open_windows(views):
             """(view, window, rect, ctx, prog, anim, vaos): una ventana por monitor o split."""
@@ -513,6 +550,7 @@ def child_main() -> None:
                     except Exception:  # noqa: BLE001 - centrar es decorativo
                         pass
                     glfw.make_context_current(win)
+                    glfw.set_scroll_callback(win, on_scroll)      # rueda: zoom de la vista
                     # con dos ventanas el vsync se pagaria dos veces por frame: aqui no esperamos
                     glfw.swap_interval(0)
                     # contexto por ventana: los objetos (program/VAO) pertenecen a SU contexto
@@ -534,6 +572,7 @@ def child_main() -> None:
                     except Exception:  # noqa: BLE001 - centrar es decorativo
                         pass
                 glfw.make_context_current(win)
+                glfw.set_scroll_callback(win, on_scroll)          # rueda: zoom de la vista apuntada
                 glfw.swap_interval(1)
                 ctx = moderngl.create_context()
                 prog = ctx.program(vertex_shader=VS, fragment_shader=FS)
@@ -548,7 +587,7 @@ def child_main() -> None:
         snap = {"view": "gauge", "views": ["gauge"], "hr": 0, "hrmax": 180,
                 "samples": [], "zone_color": "#ef4444"}
         clock = time.time()
-        slots, key = [], None
+        key = None                     # `slots` es el estado que ve el callback de la rueda
         frames, report_t, work = 0, time.time(), 0.0
         while True:
             t0 = time.time()
@@ -557,6 +596,9 @@ def child_main() -> None:
                 break                                       # el dashboard cerro la tuberia
             if got is not None:
                 snap = got
+                for v, z in (snap.get("zoom") or {}).items():   # zoom fijado desde fuera
+                    if isinstance(z, (int, float)) and zoom.get(v) != float(z):
+                        zoom[v] = float(z)
             views = [v for v in (snap.get("views") or [snap.get("view", "gauge")]) if v in SCENES]
             if not views:
                 break
@@ -589,6 +631,7 @@ def child_main() -> None:
                 ctx.viewport = (x, y, vw, vh)
                 ctx.clear(*FLOOR, 1.0)
                 anim["t"] = t0 - clock
+                anim["dist"] = zoom.get(view, CHASE_DIST)
                 layers, cam = SCENES[view](snap, anim, max(0.25, vw / vh))
                 for name, mesh in layers:
                     if mesh is None:
@@ -609,7 +652,8 @@ def child_main() -> None:
             if frames >= 60:
                 now = time.time()
                 _emit({"fps": round(frames / max(1e-6, now - report_t), 1),
-                       "ms": round(1000 * work / max(1, frames), 1)})
+                       "ms": round(1000 * work / max(1, frames), 1),
+                       "dist": {v: round(z, 3) for v, z in zoom.items()}})
                 frames, report_t, work = 0, now, 0.0
             work += time.time() - t0
             time.sleep(max(0.0, 0.02 - (time.time() - t0)))
