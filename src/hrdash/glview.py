@@ -51,6 +51,9 @@ GRID = (0.19, 0.22, 0.27)
 ASPHALT = (0.17, 0.18, 0.21)
 EDGE = (0.62, 0.66, 0.70)
 META = (0.90, 0.92, 0.95)
+KERB = (0.52, 0.20, 0.16)            # kerb rojo del borde interior
+HALF_W = 5.0                         # ancho de pista: 8 calles de 1,22 m
+TRACK_LEN = 400.0                    # perimetro del trazado (a escala real, 1 u = 1 m)
 CHASE_DIST = 2.4                    # chase por defecto; la rueda acerca hasta primera persona
 ZOOM_MIN, ZOOM_MAX = 0.20, 6.0
 STEP_ZOOM = 0.18                    # salto por notch de rueda
@@ -185,33 +188,35 @@ class Mesh:
                 self.box(sx, y0 + curve, (z0 + z1) / 2, 0.16, 0.12,
                          z1 - z0 + 0.6, steel)
 
-    def ribbon(self, pts, half, bank, col, off=0.0) -> None:
-        """Cinta continua sobre el trazado `pts` (x,y,tx,ty): peralte + desplazamiento.
+    def ribbon(self, pts, half, col, off=0.0, light=0.0) -> None:
+        """Cinta continua sobre el trazado `pts` (x, y, tx, ty, bank por punto).
 
-        `bank` en radianes inclina la seccion (como un velodromo); `off` desplaza la
-        cinta a lo ancho (para pintar los bordes sobre el asfalto).
+        El peralte es por punto (en un 400 m real solo las curvas estan inclinadas) y la
+        altura de cada banda es `tan(bank) * (q + HALF_W)` con `q` la coordenada lateral
+        medida desde el borde interior, que queda a 0. `off` desplaza la cinta a lo ancho
+        (lineas y kerbs sobre el asfalto).
         """
         prev = None
-        cb, sb = math.cos(bank), math.sin(bank)
-        for (x, y, tx, ty) in pts:
+        for (x, y, tx, ty, bank) in pts:
             ln = math.hypot(tx, ty) or 1.0
-            nx, ny = -ty / ln, tx / ln                     # normal horizontal (exterior)
-            ox = (nx * cb) * half + nx * off
-            oy = (ny * cb) * half + ny * off
-            outer = (x + ox, y + oy, sb * half)
-            inner = (x - ox, y - oy, sb * half)
+            nx, ny = ty / ln, -tx / ln                     # normal horizontal (exterior)
+            tb = math.tan(bank)
+            q_in, q_out = off - half, off + half
+            a_in = (x + nx * q_in, y + ny * q_in, tb * (q_in + HALF_W))
+            a_out = (x + nx * q_out, y + ny * q_out, tb * (q_out + HALF_W))
+            cb, sb = math.cos(bank), math.sin(bank)
             if prev:
-                self.quad(prev[0], prev[1], outer, inner, col, (0.0, 0.0, 1.0))
-            prev = (inner, outer)
+                self.quad(prev[0], prev[1], a_out, a_in, col, (-nx * sb, -ny * sb, cb), light)
+            prev = (a_in, a_out)
 
-    def floor(self, size=3.2, step=0.4, col=GRID, z0=0.0) -> None:
+    def floor(self, size=3.2, step=0.4, col=GRID, z0=0.0, lw=0.012) -> None:
         """Piso con grilla: un platano oscuro + lineas finas, apoyado en z0."""
         self.box(0, 0, z0 - 0.04, 2 * size, 2 * size, 0.06, FLOOR)
         k = max(1, int(2 * size / step))
         for i in range(k + 1):
             p = -size + i * (2 * size / k)
-            self.box(p, 0, z0 - 0.005, 0.012, 2 * size, 0.012, col)
-            self.box(0, p, z0 - 0.005, 2 * size, 0.012, 0.012, col)
+            self.box(p, 0, z0 - 0.005, lw, 2 * size, lw, col)
+            self.box(0, p, z0 - 0.005, 2 * size, lw, lw, col)
 
     def merge(self, other: "Mesh") -> None:
         """Anexa otra malla (ya transformada): un solo VBO para todo el cluster."""
@@ -341,21 +346,56 @@ def scene_gauge(snap, anim, aspect=1.6):
     return CLUSTER.build(snap, anim, aspect)
 
 
-def oval(cx, cy, steps=30):
-    """Trazado del velodromo (dos rectas + dos semicirculos), sentido antihorario."""
-    r = cy
+def track(r=36.0, bank=math.radians(14.0), step=2.0):
+    """Trazado de 400 m tipo Londres/Monaco: dos rectas y dos curvas, sentido antihorario
+    (el de carrera), meta en el primer punto.
+
+    Muestreado a paso fijo de arco para que la fraccion de vuelta sea distancia real, y
+    con peralte solo en las curvas (rampa de entrada y salida; en rectas el peralte es 0).
+    Cada punto: (x, y, tx, ty, bank). El ultimo punto repite el primero para cerrar.
+    """
+    L = (TRACK_LEN - 2 * math.pi * r) / 2.0
+    half = L / 2.0
+    ns, nc = max(2, int(round(L / step))), max(2, int(round(math.pi * r / step)))
+    ds, dc = L / ns, math.pi * r / nc            # paso exacto de arco: la fraccion es distancia real
+
+    def ramp(a):
+        up = min(1.0, a / (0.25 * math.pi))
+        down = min(1.0, (math.pi - a) / (0.25 * math.pi))
+        return bank * min(up, down)
+
     pts = []
-    for i in range(steps + 1):
-        pts.append((-cx + 2 * cx * i / steps, -cy, 1.0, 0.0))
-    for i in range(1, steps + 1):
-        a = -math.pi / 2 + math.pi * i / steps
-        pts.append((cx + r * math.cos(a), r * math.sin(a), math.cos(a), math.sin(a)))
-    for i in range(steps + 1):
-        pts.append((cx - 2 * cx * i / steps, cy, -1.0, 0.0))
-    for i in range(1, steps + 1):
-        a = math.pi / 2 + math.pi * i / steps
-        pts.append((-cx + r * math.cos(a), r * math.sin(a), math.cos(a), math.sin(a)))
+    for i in range(ns):                                   # recta de abajo
+        pts.append((-half + i * ds, -r, 1.0, 0.0, 0.0))
+    for i in range(nc):                                   # curva derecha
+        a = -math.pi / 2 + math.pi * i / nc
+        pts.append((half + r * math.cos(a), r * math.sin(a),
+                    -math.sin(a), math.cos(a), ramp(math.pi * i / nc)))
+    for i in range(ns):                                   # recta de arriba
+        pts.append((half - i * ds, r, -1.0, 0.0, 0.0))
+    for i in range(nc):                                   # curva izquierda
+        a = math.pi / 2 + math.pi * i / nc
+        pts.append((-half + r * math.cos(a), r * math.sin(a),
+                    -math.sin(a), math.cos(a), ramp(math.pi * i / nc)))
+    pts.append(pts[0])                                    # cierra el trazado
     return pts
+
+
+def build_static(pts):
+    """Lo que no cambia nunca: pista, lineas de calles, kerb, meta y suelo del estadio."""
+    m = Mesh()
+    m.floor(size=95, step=5.0, col=GRID, z0=-0.06, lw=0.06)
+    m.ribbon(pts, HALF_W, ASPHALT)
+    for q in (-HALF_W + 0.12, HALF_W - 0.12):             # lineas de las calles extrema
+        m.ribbon(pts, 0.06, EDGE, off=q)
+    m.ribbon(pts, 0.14, KERB, off=-HALF_W + 0.14)         # kerb del borde interior
+    x, y, tx, ty, b = pts[0]
+    nx, ny = ty, -tx                                      # a lo ancho en el punto de meta
+    for i in range(10):                                   # meta cuadriculada, a traves
+        q = -HALF_W + (i + 0.5)
+        m.box(x + nx * q, y + ny * q, math.tan(b) * (q + HALF_W) + 0.02, 0.4, 1.0, 0.04,
+              META if i % 2 == 0 else (0.05, 0.06, 0.08), 0.0, 0.25)
+    return m
 
 
 SKIN = (0.62, 0.49, 0.41)
@@ -364,10 +404,13 @@ RIM = (0.24, 0.26, 0.30)
 TIRE = (0.12, 0.13, 0.15)
 SHOE = (0.11, 0.12, 0.14)
 HELMET = (0.86, 0.89, 0.93)
-BANK = math.radians(26.0)             # peralte del trazado (lo mismo que usa ribbon)
-# Proporciones del atleta a la escala del tablero (~0,33 del real sobre rueda de 0,15)
-WR, BB_H, HIP_H, SHO_H, HEAD_H = 0.15, 0.09, 0.27, 0.36, 0.42
-CRANK, THIGH, SHIN = 0.06, 0.14, 0.14
+# Proporciones del atleta y la bici en metros (el trazado esta a 1 unidad = 1 m)
+WR, BB_H = 0.34, 0.27                                   # radio de rueda, altura del pedalier
+REAR, FRONT = (-0.53, WR), (0.56, WR)                   # ejes (batalla ~1,09 m)
+HTUBE, BAR = (0.40, 0.70), (0.47, 0.62)                 # direccion y manillar
+HIP, SHO, HEAD = (-0.16, 0.78), (0.08, 1.06), (0.20, 1.22)   # postura inclinada de carrera
+CRANK, THIGH, SHIN = 0.17, 0.43, 0.44
+Q_RIDER = -3.0                          # linea del rider: 3 m dentro del eje de pista
 
 
 def _knee(H, F, L1, L2):
@@ -393,115 +436,128 @@ def _rider(m, base, fwd, up, lat, theta, kit, pov=False) -> None:
                 base[1] + fwd[1] * s + up[1] * h + lat[1] * w,
                 base[2] + fwd[2] * s + up[2] * h + lat[2] * w)
 
-    bb, hip, sho, hd, bar = (0.0, BB_H), (-0.10, HIP_H), (0.0, SHO_H), (0.18, HEAD_H), (0.27, 0.32)
-    rear, front, htube = (-0.17, WR), (0.18, WR), (0.24, 0.30)
+    saddle = (HIP[0], HIP[1] + 0.05)
 
-    for a, b, r in ((bb, (-0.10, HIP_H + 0.02), 0.014), (bb, htube, 0.014),
-                    ((-0.10, HIP_H + 0.02), htube, 0.012), (htube, front, 0.012),
-                    (bb, rear, 0.012), ((-0.10, HIP_H + 0.02), rear, 0.011),
-                    (htube, bar, 0.012)):
+    for a, b, r in (((0.0, BB_H), saddle, 0.018), ((0.0, BB_H), HTUBE, 0.022),
+                    (saddle, HTUBE, 0.015), (HTUBE, FRONT, 0.017),
+                    ((0.0, BB_H), REAR, 0.015), (saddle, REAR, 0.012),
+                    (HTUBE, BAR, 0.017)):
         m.segment(P(a[0], a[1]), P(b[0], b[1]), r, FRAME, 0.15)
-    for c in (rear, front):
-        m.wheel(P(c[0], c[1]), WR, fwd, up, lat, TIRE, 0.022, 16, 0.12)
+    for c in (REAR, FRONT):
+        m.wheel(P(c[0], c[1]), WR, fwd, up, lat, TIRE, 0.03, 16, 0.12)
         p = P(c[0], c[1])
-        m.box(p[0], p[1], p[2], 0.03, 0.03, 0.03, RIM, 0.0, 0.2)
+        m.box(p[0], p[1], p[2], 0.06, 0.06, 0.06, RIM, 0.0, 0.2)
 
     for side in (1.0, -1.0):
         ph = theta if side > 0 else theta + math.pi
         foot = (CRANK * math.cos(ph), BB_H + CRANK * math.sin(ph))
-        m.segment(P(0.0, BB_H, 0.05 * side), P(foot[0], foot[1], 0.05 * side), 0.012, RIM, 0.2)
-        kn = _knee(hip, foot, THIGH, SHIN)
+        m.segment(P(0.0, BB_H, 0.06 * side), P(foot[0], foot[1], 0.06 * side), 0.014, RIM, 0.2)
+        kn = _knee(HIP, foot, THIGH, SHIN)
         if not pov:
-            m.segment(P(hip[0], hip[1], 0.035 * side), P(kn[0], kn[1], 0.045 * side), 0.030, SKIN, 0.2)
-            m.segment(P(kn[0], kn[1], 0.045 * side), P(foot[0], foot[1], 0.05 * side), 0.024, SKIN, 0.2)
-            m.segment(P(sho[0], sho[1], 0.05 * side), P(bar[0], bar[1], 0.04 * side), 0.022, SKIN, 0.2)
-        p = P(foot[0], foot[1], 0.05 * side)
-        m.box(p[0], p[1], p[2], 0.06, 0.03, 0.02, SHOE, 0.0, 0.15)
-        h = P(bar[0], bar[1], 0.04 * side)
-        m.box(h[0], h[1], h[2], 0.035, 0.03, 0.025, SKIN, 0.0, 0.25)
+            m.segment(P(HIP[0], HIP[1], 0.06 * side), P(kn[0], kn[1], 0.07 * side), 0.065, SKIN, 0.2)
+            m.segment(P(kn[0], kn[1], 0.07 * side), P(foot[0], foot[1], 0.075 * side), 0.048, SKIN, 0.2)
+            m.segment(P(SHO[0], SHO[1], 0.07 * side), P(BAR[0], BAR[1], 0.05 * side), 0.040, SKIN, 0.2)
+        p = P(foot[0], foot[1], 0.075 * side)
+        m.box(p[0], p[1], p[2], 0.28, 0.11, 0.07, SHOE, 0.0, 0.15)              # zapatilla
+        h = P(BAR[0], BAR[1], 0.05 * side)
+        m.box(h[0], h[1], h[2], 0.11, 0.09, 0.06, SKIN, 0.0, 0.25)              # mano en el manillar
     if not pov:
-        m.segment(P(hip[0], hip[1]), P(sho[0], sho[1]), 0.050, kit, 0.35)      # torso
-        p = P(hd[0], hd[1])
-        m.box(p[0], p[1], p[2], 0.07, 0.07, 0.06, HELMET, 0.0, 0.3)
+        m.segment(P(HIP[0], HIP[1]), P(SHO[0], SHO[1]), 0.100, kit, 0.35)        # torso
+        m.segment(P(SHO[0], SHO[1]), P(HEAD[0], HEAD[1]), 0.050, SKIN, 0.25)     # cuello
+        p = P(HEAD[0], HEAD[1])
+        m.box(p[0], p[1], p[2], 0.22, 0.19, 0.13, HELMET, 0.0, 0.3)
 
 
 def scene_pista(snap, anim, aspect=1.6):
-    """Velodromo con peralte, meta cuadriculada, estela y marcador de la bici.
+    """Pista de 400 m a escala real (1 unidad = 1 m): dos rectas, dos curvas peraltadas.
 
-    Cámara **chase** (1 persona, estilo juego de carreras): detras de la bici, mirando
-    hacia adelante, con la distancia configurable por el piloto.
+    Lo fijo (pista, lineas de calles, kerb, meta y suelo del estadio) se construye una
+    vez y se conserva como capa estatica; por frame solo cambian el rider, la estela y
+    la camara chase (1 persona, estilo juego de carreras, distancia configurable).
     """
+    pts = anim.get("pts")
+    if pts is None:
+        pts = anim["pts"] = track()
+    if anim.get("static") is None:
+        anim["static"] = build_static(pts)
+        layers = [("static", anim["static"])]
+    else:
+        layers = [("static", None)]                 # VBO vivo: la pista no se reconstruye
     m = Mesh()
-    cx, cy = 2.15, 1.30
-    pts = oval(cx, cy, 26)
-    m.box(0, 0, -0.14, 2 * (cx + cy) + 1.6, 2 * (cy + 1.2) + 1.6, 0.10, FLOOR)
-    m.ribbon(pts, 0.46, BANK, ASPHALT)
-    m.ribbon(pts, 0.06, BANK, EDGE, off=0.42)
-    m.ribbon(pts, 0.05, BANK, (0.30, 0.33, 0.38), off=-0.42)
-    for i in range(6):                                        # meta en la recta de arriba
-        m.box(0.0, -cy + (i - 2.5) * 0.16, 0.06, 0.9, 0.15, 0.05,
-              META if i % 2 == 0 else (0.05, 0.06, 0.08))
-    lap_m = max(100, int(snap.get("lap_m") or 5000))
-    frac = float(snap.get("lap_frac") or 0.0)
-    anim["dt"] = min(0.2, max(0.0, anim["t"] - anim.get("last", 0.0))) or 0.02
-    anim["last"] = anim["t"]
+
     # Inercia: la telemetria no cambia de golpe. 3,0 m/s^2 para acelerar, 2,5 para frenar
     # y +/-40 rpm/s de cadencia. Si el rider para antes de meta, desacopla y se queda.
+    anim["dt"] = min(0.2, max(0.0, anim["t"] - anim.get("last", 0.0))) or 0.02
+    anim["last"] = anim["t"]
     spd = max(0.0, float(snap.get("speed") or 0.0) / 3.6)
     cad = max(0.0, float(snap.get("cadence") or 0.0))
     dv, dc = spd - anim["v"], cad - anim["c"]
     anim["v"] += min(dv, 3.0 * anim["dt"]) if dv > 0 else max(dv, -2.5 * anim["dt"])
     anim["c"] += min(dc, 40.0 * anim["dt"]) if dc > 0 else max(dc, -40.0 * anim["dt"])
-    anim["frac"] = (anim["frac"] + anim["v"] * anim["dt"] / lap_m) % 1.0
-    if abs(anim["frac"] - frac) > 0.3:                          # vuelta cerrada: no rebobinar
+    # El circuito siempre mide TRACK_LEN: la posicion es la distancia recorrida modulo la
+    # pista, y la fraccion avanza con la velocidad suavizada (no con la del snap).
+    d0 = float(snap.get("dist_km") or 0.0) * 1000.0
+    frac = (d0 % TRACK_LEN) / TRACK_LEN
+    if anim.get("anchor") is None:
+        anim["frac"] = frac                        # primer frame: arrancar en la posicion real
+    elif (frac - anim["anchor"]) % 1.0 > 0.3:      # el snap retrocede: vuelta cerrada o reset
         anim["frac"] = frac
+    else:
+        # Con la fraccion movida por la velocidad suavizada, si la telemetria se para el rider
+        # sigue rodando por inercia y se queda donde lo deja la frenada (no lo jala el snap).
+        anim["frac"] = (anim["frac"] + anim["v"] * anim["dt"] / TRACK_LEN) % 1.0
+    anim["anchor"] = frac
     anim["crank"] = anim["crank"] + (anim["c"] / 60.0) * 2 * math.pi * anim["dt"]
+
     col = _hex(snap.get("zone_color") or "#22d3ee")
-    bx, by, btx, bty = _at(pts, anim["frac"])
+    bx, by, btx, bty, bank = _at(pts, anim["frac"])
     bl = math.hypot(btx, bty) or 1.0
     fx, fy = btx / bl, bty / bl
-    cb, sb = math.cos(BANK), math.sin(BANK)
-    nx, ny = -fy, fx                                   # normal horizontal (exterior)
-    up = (nx * cb, ny * cb, sb)                        # normal de la superficie peraltada
-    lat = (-up[2] * fy, up[2] * fx, up[1] * fy - up[0] * fx)
-    ll = math.sqrt(lat[0] * lat[1] + lat[2] * lat[2]) or 1.0
-    lat = (lat[0] / ll, lat[1] / ll, lat[2] / ll)
+    nx, ny = fy, -fx                                       # normal horizontal (exterior)
+    cb, sb = math.cos(bank), math.sin(bank)
+    up = (-nx * sb, -ny * sb, cb)                          # normal del plano inclinado
+    lat = (nx * cb, ny * cb, sb)                           # lateral sobre la superficie
     fwd = (fx, fy, 0.0)
-    base = (bx, by, sb * 0.46)                         # apoyo sobre el asfalto peraltado
+    base = (bx + nx * Q_RIDER, by + ny * Q_RIDER, math.tan(bank) * (Q_RIDER + HALF_W))
     # Estela por posiciones reales: al pararse deja de crecer y se desvanece (no avanza
     # por detrás de un rider que ya esta quieto).
     tr = anim["trail"]
-    if not tr or math.hypot(base[0] - tr[-1][1][0], base[1] - tr[-1][1][1]) >= 0.01:
+    if not tr or math.hypot(base[0] - tr[-1][1][0], base[1] - tr[-1][1][1]) >= 0.05:
         tr.append((anim["t"], base))
     while tr and (anim["t"] - tr[0][0] > TRAIL_T or len(tr) > 24):
         tr.pop(0)
     for tt, p in tr:
         fade = max(0.12, 1.0 - (anim["t"] - tt) / TRAIL_T)
-        m.box(p[0], p[1], p[2] + 0.012, 0.14, 0.14, 0.03,
+        m.box(p[0], p[1], p[2] + 0.02, 0.30, 0.30, 0.04,
               tuple(c * (0.15 + 0.85 * fade) for c in col))
+
     dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
     pov = dist < 0.5
     _rider(m, base, fwd, up, lat, anim["crank"], col, pov=pov)
     # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici;
     # al cerrar el zoom sube al casco (primera persona). Alturas medidas en `up`.
-    k = min(1.0, max(0.0, (dist - 0.2) / 0.8))
-    eh, ch = 0.42 - 0.07 * k, 0.14 - 0.12 * k
-    s0 = -dist + 0.18 * max(0.0, (0.5 - dist) / 0.3)      # en POV se acerca al casco
-    ahead = max(1.4, dist * 1.2)
+    k = min(1.0, max(0.0, (dist - ZOOM_MIN) / 0.6))
+    # open angular: con 0,62 la bici quedaba fuera del cuadro a 2,4 m. En primera persona
+    # hace falta mas angular y mas pitch para ver manillar y rueda delante de la mira.
+    fovy = 1.00 + 0.30 * (1.0 - k)
+    pitch = 0.50 - 0.35 * k
+    eh = HEAD[1] + 0.03 + 0.35 * k
+    ahead = max(4.0, dist * 1.9)
+    s0 = HEAD[0] if pov else -dist
     eye = tuple(base[j] + fwd[j] * s0 + up[j] * eh for j in range(3))
-    center = tuple(base[j] + fwd[j] * (s0 + ahead) + up[j] * ch for j in range(3))
-    return [("frame", m)], (eye, center, (0.0, 0.0, 1.0), 0.62)
+    center = tuple(base[j] + fwd[j] * (s0 + ahead) + up[j] * (eh - ahead * pitch) for j in range(3))
+    return layers + [("frame", m)], (eye, center, (0.0, 0.0, 1.0), fovy, 300.0)
 
 
 def _at(pts, f):
-    """Punto (x, y, tangente) en la fraccion `f` del trazado, interpolado entre muestras:
+    """Punto (x, y, tx, ty, bank) en la fraccion `f` del trazado, interpolado entre muestras:
     sin interpolacion el rider salta de indice en indice y la estela se corta."""
     n = len(pts) - 1
     i = min(n - 1, max(0, int(f * n)))
     k = f * n - i
-    x0, y0, tx0, ty0 = pts[i]
-    x1, y1, _tx1, _ty1 = pts[i + 1]
-    return (x0 + (x1 - x0) * k, y0 + (y1 - y0) * k, tx0, ty0)
+    x0, y0, tx0, ty0, b0 = pts[i]
+    x1, y1, _tx1, _ty1, _b1 = pts[i + 1]
+    return (x0 + (x1 - x0) * k, y0 + (y1 - y0) * k, tx0, ty0, b0)
 
 
 SCENES = {"hr": scene_hr, "watts": scene_watts, "gauge": scene_gauge, "pista": scene_pista}
@@ -589,7 +645,8 @@ def _split_rect(view, i, n):
 
 def _new_anim():
     return {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0,
-            "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0, "crank": 0.0, "trail": []}
+            "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0, "crank": 0.0,
+            "trail": [], "pts": None, "static": None, "anchor": None}
 
 
 def _uniq(items):
@@ -769,8 +826,9 @@ def child_main() -> None:
                         old.release()
                     buf = ctx.buffer(np.asarray(mesh.v or [0.0] * 10, dtype="f4").tobytes())
                     vaos[name] = ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)])
-                eye, center, up, fovy = cam
-                mvp = perspective(fovy, vw / vh) @ look_at(eye, center, up)
+                eye, center, up, fovy = cam[:4]
+                far = cam[4] if len(cam) > 4 else 80.0     # la pista necesita mas fondo
+                mvp = perspective(fovy, vw / vh, 0.1, far) @ look_at(eye, center, up)
                 prog["mvp"].write(np.ascontiguousarray(mvp.T, dtype="f4").tobytes())
                 for va in vaos.values():
                     va.render(moderngl.TRIANGLES)
