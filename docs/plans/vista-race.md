@@ -137,8 +137,14 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   1 marca.
 - El circuito siempre mide 400 m: la posicion del rider es `dist_km*1000 % 400` (el odometro
   real), no `lap_frac`, que sigue usandose solo en la vista `pista` de la TUI.
-- Estetica de velodromo (`680e3d2`): paleta **medida de las fotos de referencia** (madera #9d7143,
-  cote d'azur #37537c, rojo #ae2824, azul #3b5e87, butacas #283241). Lo que se añadio:
+- Estetica de velodromo (`680e3d2` + paleta recalibrada): paleta **medida de las fotos de
+  referencia** (Calshot y Forest City) decodificando el JPEG a BMP con `sips` y promediando bloques
+  en Python puro (no hay PIL en el entorno, y la API de muestreo no es accesible desde el sandbox).
+  Valores de foto: madera en zona media **#b59b77**, bajo la lampara **#d7c2a9**, muro **#73613a**,
+  cupula gris calida #2b1d0b. La primera paleta (madera #9d7143) estaba saturada de mas y el
+  pabellon salia naranja; el albedo se pone por encima del valor de foto porque el shader lo
+  multiplica por la luz (para un plano horizontal la luz total es ~0,87, asi que albedo
+  #bba17e reproduce #a5906f de foto, que es el valor medido en la curva iluminada). Lo que se añadio:
   tablon con junta, lineas UCI en sus distancias reales (azul 0,10 m, negra 0,24, roja 0,94,
   azul del stayer 4,30, borde blanco), meta al final de la recta de meta, muro perimetral con el
   tablon elevado 1,05 m sobre el piso, gradas de 11 filas escalonadas con bloques de color y
@@ -146,7 +152,9 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   (calida 0,95 + relleno frio 0,19) + ambiente hemisferico + especular + niebla; el charco de luz
   se hornea por vertice (`tint`) porque el programa no tiene luces puntuales. Paso del trazado
   2 m -> 1 m: con 2 m las bandas estrechas serruchaban en las curvas. Coste: 73.172 tris
-  estaticos (se suben una vez) y ~730 por frame; medido en el proceso real 45,5 fps / 5,6 ms.
+  estaticos (se suben una vez) y 730 por frame; medido en el proceso real 47,7 fps / 4,5 ms.
+  Comprobacion visual de la recalibracion: `v14_curve.png` (curva), `v14_straight.png` (recta con
+  cerchos y lamparas) y `v14_pov.png` (1a persona, manillar y manos en el cuadro).
 - Camara en 1a persona separada del chase: ojo a 1,15 m (altura de los ojos, no de la cumbrera
   del casco) y pitch 0,55 rad; con el pitch del chase el manillar y la rueda delantera salian
   fuera del encuadre. El `roll` de la rueda gira por distancia recorrida (arco/radio), no por

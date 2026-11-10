@@ -62,15 +62,17 @@ VATTR = "3f 3f 3f 1f"                     # posicion, normal, color, emisivo
 FIELDS = ("in_position", "in_normal", "in_color", "in_light")
 GRID = (0.19, 0.22, 0.27)
 
-# Paleta del velodromo, muestreada de las fotos de referencia (pabellon a ~3000K):
-# madera de pino siberiano ambarina, no asfalto gris.
-WOOD = (0.615, 0.443, 0.263)              # tablon iluminado (#9d7143)
-WOOD_D = (0.551, 0.392, 0.231)            # junta entre tablones (la base, mas oscura)
+# Paleta del velodromo, muestreada de las fotos de referencia (pabellon a ~3000K) decodificando
+# el JPEG a BMP y promediando bloques: la madera es mas clara y menos saturada de lo que parece
+# a ojo (#b59b77 en zona media, #d7c2a9 bajo la lampara). El shader multiplica el albedo por la
+# luz, asi que el albedo se pone un poco por encima del valor de foto para que coincida.
+WOOD = (0.735, 0.635, 0.494)              # tablon, albedo medio (#bba17e)
+WOOD_D = (0.660, 0.569, 0.439)            # junta entre tablones (la base, mas oscura)
 # Tono por tablon: la variacion es pequeña y constante a lo largo del tablon. Con variacion
 # por cuadro la pista sale en "ladrillos" (parquet), no en tablones largos.
-WOODS = [WOOD, (0.648, 0.481, 0.292), (0.583, 0.412, 0.244), (0.661, 0.497, 0.305),
-         (0.626, 0.457, 0.271), (0.566, 0.398, 0.236), (0.639, 0.468, 0.278),
-         (0.602, 0.430, 0.255), (0.654, 0.488, 0.297), (0.591, 0.420, 0.248)]
+WOODS = [WOOD, (0.761, 0.660, 0.514), (0.708, 0.610, 0.471), (0.782, 0.678, 0.533),
+         (0.745, 0.645, 0.502), (0.694, 0.598, 0.463), (0.754, 0.652, 0.508),
+         (0.720, 0.622, 0.482), (0.768, 0.666, 0.520), (0.715, 0.616, 0.476)]
 APRON = (0.246, 0.345, 0.478)             # apron de hormigon pintado, en el interior
 SHADOW = (0.098, 0.105, 0.118)
 AZUR = (0.216, 0.329, 0.490)              # cote d'azur: el azul del borde interior
@@ -79,7 +81,7 @@ LINE_RED = (0.686, 0.157, 0.145)          # linea del sprinter (70 cm sobre la n
 LINE_BLUE = (0.231, 0.369, 0.545)         # linea del stayer (madison)
 LINE_WHITE = (0.827, 0.847, 0.871)        # borde exterior
 META = (0.900, 0.920, 0.950)              # meta cuadriculada, negro sobre blanco
-WALL = (0.447, 0.314, 0.204)              # madera del muro perimetral
+WALL = (0.451, 0.380, 0.227)              # madera del muro perimetral (#73613a en la foto)
 SEAT = (0.157, 0.196, 0.255)              # butacas
 SEAT_F = (0.118, 0.145, 0.185)            # escalon entre filas
 # Bloques de color en las gradas (bloques de butacas sueltos, como en las fotos) y
@@ -87,7 +89,7 @@ SEAT_F = (0.118, 0.145, 0.185)            # escalon entre filas
 SEATS = [SEAT, (0.400, 0.290, 0.130), (0.420, 0.165, 0.145), (0.215, 0.300, 0.395)]
 STEEL = (0.26, 0.29, 0.34)
 RIB = (0.349, 0.380, 0.420)               # cerchos de madera laminada
-ROOF = (0.196, 0.212, 0.239)
+ROOF = (0.190, 0.172, 0.145)              # cupula: gris calido, no neutro
 LAMP = (0.941, 0.863, 0.651)              # lamparas calidas colgadas
 INFIELD = (0.106, 0.122, 0.149)
 
