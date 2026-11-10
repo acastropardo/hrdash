@@ -52,6 +52,22 @@ siendo la fuente (no una ruta) y se puede combinar con `--3d`.
   `standalone_key` es funcion pura para poder afirmarla headless. En standalone la ventana
   hereda las vistas del primer snapshot y luego las cambia ella, reportando `views` al
   motor; el motor las refleja en el siguiente snapshot (no se pisaban).
+
+### Bug corregido: las flechas salian la app
+
+Al cambiar de vista, el memo del loop destruia la ventana y la recreaba. moderngl cachea
+su primer contexto del proceso y desde el segundo `create_context` intenta detectar el
+contexto actual (`glXGetCurrentContext`), que en Linux devuelve NULL y levanta: el hijo
+morria con `err` y `cmd_3d` salia (en la TUI se caia a 2D sin avisar). Con teclado real
+se notaba al navegar con `← →`; los harnesses de glfw falso no lo detectaban porque su
+`create_context` siempre devuelve un contexto.
+
+Fix: la ventana primaria y su contexto persisten entre cambios de vista (el memo solo
+destruye la ventana de la vista que sale, liberando sus VAOs con su contexto; el dict
+`by_view` se llama asi para no chocar con el `keep, got = feed()` del loop). La ventana
+por monitor se intenta si hay monitores para todas las vistas; si la deturacion del
+segundo contexto falla, todo el render vuelve al split sobre la primaria sin matar el
+hijo.
 - Persistencia: `cmd_3d` guarda `last_device`/`last_trainer` al salir, igual que la TUI.
 
 ## Como se verifica
@@ -69,9 +85,17 @@ siendo la fuente (no una ruta) y se puede combinar con `--3d`.
     abre (exit 2 pero exporta), host que no arranca (exit 2), exclusividad argparse, y
     `standalone_key` (h/w/g/p cambian, 3/r toggle, left/right en el orden de la consola,
     q/x se reenvian). El export se valida con el round-trip FIT (`validate`) en todos.
+  - `arrow_check.py`: teclas sinteticas en `child_main` con glfw/moderngl falsos (mismo
+    patron que `mouse_validate`): right/left/p/q inyectados por el callback registrado,
+    un hilo emula al motor reflejando los `views`. Afirma el orden de la consola, el
+    reenvio de `q`, la tecla desconocida y que el loop llega al EOF sin err. Los codigos
+    de tecla del fake deben ser DISTINCTOS (una tabla `40000+len(name)` colisiona y
+    falsea el resultado), y la escena real corre sobre el snapshot del engine.
   - Proceso real (maquina con display): una linea JSON con `standalone` y dos vistas ->
     `win` con las dos vistas, EOF -> exit 0, sin huerfanos. La ventana no se puede
-    afirmar headless.
+    afirmar headless. El cambio de vista con ventana real (gauge -> pista -> hr -> watts
+    -> split) debe emitir `win` sin `err` y EOF -> exit 0: eso es lo que fallaba por la
+    deturacion de contexto de moderngl y ahora pasa.
 - Falta confirmar con teclado real en la ventana: `h/w/g/p` y `3`/`r` de la ventana
   (hacen falta eventos reales y foco; los nombres se prueban por la funcion pura).
 - TUI intacta: `3` y `r` siguen funcionando por el mismo builder (`proto.build_snapshot`,

@@ -1107,6 +1107,9 @@ def child_main() -> None:
         press = {}                     # winkey(ventana) -> punto donde empezo el arrastre
         focus = {}                     # winkey(ventana) -> enfocada (sin foco no llegan teclas)
         nudge = None                   # nonce del ultimo paso de zoom que aplico el hijo
+        primary = None                 # (win, ctx, prog, size): la ventana que no se recrea
+        by_view = {}                     # view -> slot: persiste entre cambios de vista
+        multi_mode = None              # ventana por monitor; se decide con el primer layout
         # Teclas reenviadas a la TUI: la TUI es la dueña de los bindings, aqui solo se traduce el
         # codigo de GLFW al nombre que la TUI usa, para no duplicar la tabla de acciones.
         KEYNAMES = {glfw.KEY_Q: "q", glfw.KEY_X: "x", glfw.KEY_S: "s", glfw.KEY_C: "c",
@@ -1282,11 +1285,29 @@ def child_main() -> None:
             focus.setdefault(winkey(win), False)
 
         def open_windows(views):
-            """(view, window, rect, ctx, prog, anim, vaos): una ventana por monitor o split."""
-            if len(views) >= 2 and len(mons) >= len(views):
+            """(view, window, rect, ctx, prog, anim, vaos): una ventana por monitor o split.
+
+            Las ventanas persisten entre cambios de vista. moderngl cachea su primer
+            contexto del proceso y desde el segundo `create_context` intenta detectar el
+            contexto actual, que en Linux devuelve NULL y levanta (glXGetCurrentContext):
+            el memo destruia y recreaba la ventana al cambiar de vista, y navegar con las
+            flechas mataba al hijo. La ventana primaria ya no se recrea (el memo la salta)
+            y el split se reconstruye sobre ella; la ventana por monitor solo funciona si
+            moderngl detecta el contexto de cada ventana, y si no se vuelve al split sin
+            matar el hijo.
+            """
+            nonlocal primary, multi_mode
+
+            if multi_mode is None:
+                multi_mode = len(views) >= 2 and len(mons) >= len(views)
+            if multi_mode:
                 for i, view in enumerate(views):
+                    if view in by_view:
+                        yield by_view[view]
+                        continue
                     size, (xa, ya, wa, ha) = _window_for(glfw, mons[i], (1920, 1080))
-                    win = glfw.create_window(size[0], size[1], f"HRDash 3D - {view}", mons[i], None)
+                    win = glfw.create_window(size[0], size[1], f"HRDash 3D - {view}",
+                                             mons[i], primary[0] if primary else None)
                     if win is None:
                         raise RuntimeError("glfw no pudo crear la ventana")
                     try:                                   # centrada en el monitor que la aloja
@@ -1299,12 +1320,27 @@ def child_main() -> None:
                     # con dos ventanas el vsync se pagaria dos veces por frame: aqui no esperamos
                     glfw.swap_interval(0)
                     # contexto por ventana: los objetos (program/VAO) pertenecen a SU contexto
-                    ctx = moderngl.create_context()
+                    try:
+                        cx = moderngl.create_context()
+                    except Exception:  # noqa: BLE001 - solo el primer contexto es detectable
+                        try:                                # (Linux): se cae al split en la
+                            glfw.destroy_window(win)        # primaria, el hijo no muere
+                        except Exception:  # noqa: BLE001
+                            pass
+                        multi_mode = False
+                        break
+                    if primary is None:
+                        primary = (win, cx, cx.program(vertex_shader=VS, fragment_shader=FS), size)
                     _emit({"win": list(size), "fb": list(glfw.get_framebuffer_size(win)),
                            "view": view, "rect": [0.0, 0.0, 1.0, 1.0]})
-                    yield (view, win, (0.0, 0.0, 1.0, 1.0), ctx,
-                           ctx.program(vertex_shader=VS, fragment_shader=FS), _new_anim(), {})
-            else:
+                    slot = (view, win, (0.0, 0.0, 1.0, 1.0), cx,
+                            cx.program(vertex_shader=VS, fragment_shader=FS), _new_anim(), {})
+                    by_view[view] = slot
+                    yield slot
+                if multi_mode:
+                    return
+
+            if primary is None:                            # ventana unica: se crea la primaria
                 size, mon = _plan_window(glfw, (1920, 1080))
                 win = glfw.create_window(size[0], size[1], "HRDash 3D", mon, None)
                 if win is None:
@@ -1319,14 +1355,21 @@ def child_main() -> None:
                 glfw.make_context_current(win)
                 bind(win)                                            # zoom, orbita y centrar
                 glfw.swap_interval(1)
-                ctx = moderngl.create_context()
-                prog = ctx.program(vertex_shader=VS, fragment_shader=FS)
-                rects = [(view, _split_rect(view, i, len(views))) for i, view in enumerate(views)]
-                _emit({"win": list(size), "fb": list(glfw.get_framebuffer_size(win)),
-                       "view": [v for v, _r in rects],
-                       "rect": [list(r) for _v, r in rects]})
-                for view, r in rects:
-                    yield (view, win, r, ctx, prog, _new_anim(), {})
+                cx = moderngl.create_context()
+                primary = (win, cx, cx.program(vertex_shader=VS, fragment_shader=FS), size)
+            win0, cx, prog, size = primary
+            rects = [(v, _split_rect(v, i, len(views))) for i, v in enumerate(views)]
+            _emit({"win": list(size), "fb": list(glfw.get_framebuffer_size(win0)),
+                   "view": [v for v, _r in rects],
+                   "rect": [list(r) for _v, r in rects]})
+            for view, r in rects:
+                if view in by_view:                           # slot que sobrevive al cambio
+                    old = by_view[view]                       # (su contexto sigue vigente)
+                    slot = (view, old[1], r, old[3], old[4], old[5], old[6])
+                else:
+                    slot = (view, win0, r, cx, prog, _new_anim(), {})
+                by_view[view] = slot
+                yield slot
 
         feed = _stdin_feed()
         snap = {"view": "gauge", "views": ["gauge"], "hr": 0, "hrmax": 180,
@@ -1361,18 +1404,25 @@ def child_main() -> None:
             shape = (tuple(views), len(mons))
             if shape != key:
                 key = shape
-                for view, win, _r, ctx, _p, _a, vaos in slots:   # release con su contexto vigente
+                # Sobreviven los slots de las vistas que siguen: la ventana primaria no se
+                # destruye porque su contexto es el unico que moderngl detecta (recrearla
+                # era el bug que mataba al hijo con las flechas). Se destruye solo la
+                # ventana de la vista que sale, liberando sus VAOs con su contexto vigente.
+                for view, win, _r, c, _p, _a, vaos in slots:
+                    if view in views:
+                        continue
                     try:
                         glfw.make_context_current(win)
                         for va in vaos.values():
                             va.release()
                     except Exception:  # noqa: BLE001
                         pass
-                for w in _uniq(s[1] for s in slots):      # window objects: no hashables
-                    try:
-                        glfw.destroy_window(w)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    if primary is None or win != primary[0]:
+                        try:
+                            glfw.destroy_window(win)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    by_view.pop(view, None)
                 slots = list(open_windows(views))
             cmd = snap.get("zoom_cmd")                   # `+`/`-`: la TUI manda el paso, no el valor
             if isinstance(cmd, (list, tuple)) and len(cmd) == 2 and cmd[0] != nudge:
