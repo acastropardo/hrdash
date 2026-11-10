@@ -54,6 +54,7 @@ META = (0.90, 0.92, 0.95)
 CHASE_DIST = 2.4                    # chase por defecto; la rueda acerca hasta primera persona
 ZOOM_MIN, ZOOM_MAX = 0.20, 6.0
 STEP_ZOOM = 0.18                    # salto por notch de rueda
+ZOOMABLE = ("pista",)               # unicas vistas con camara configurable por rueda
 ZCOLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
 
 A0, SWEEP = 225.0, 270.0            # barrido del dial (igual que gauges.py)
@@ -529,7 +530,7 @@ def child_main() -> None:
         def on_scroll(win, _dx, dy):
             """Rueda: acerca/aleja la camara de la vista apuntada (chase <-> 1a persona)."""
             v = view_under(win)
-            if v is None:
+            if v is None or v not in ZOOMABLE:
                 return
             z = min(ZOOM_MAX, max(ZOOM_MIN, zoom.get(v, CHASE_DIST) + STEP_ZOOM * float(dy)))
             if z != zoom.get(v, CHASE_DIST):
@@ -597,8 +598,8 @@ def child_main() -> None:
             if got is not None:
                 snap = got
                 for v, z in (snap.get("zoom") or {}).items():   # zoom fijado desde fuera
-                    if isinstance(z, (int, float)) and zoom.get(v) != float(z):
-                        zoom[v] = float(z)
+                    if v in ZOOMABLE and isinstance(z, (int, float)) and zoom.get(v) != float(z):
+                        zoom[v] = min(ZOOM_MAX, max(ZOOM_MIN, float(z)))
             views = [v for v in (snap.get("views") or [snap.get("view", "gauge")]) if v in SCENES]
             if not views:
                 break
