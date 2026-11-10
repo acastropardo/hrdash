@@ -137,7 +137,7 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   1 marca.
 - El circuito siempre mide 400 m: la posicion del rider es `dist_km*1000 % 400` (el odometro
   real), no `lap_frac`, que sigue usandose solo en la vista `pista` de la TUI.
-- Estetica de velodromo (fase 5): paleta **medida de las fotos de referencia** (madera #9d7143,
+- Estetica de velodromo (`680e3d2`): paleta **medida de las fotos de referencia** (madera #9d7143,
   cote d'azur #37537c, rojo #ae2824, azul #3b5e87, butacas #283241). Lo que se añadio:
   tablon con junta, lineas UCI en sus distancias reales (azul 0,10 m, negra 0,24, roja 0,94,
   azul del stayer 4,30, borde blanco), meta al final de la recta de meta, muro perimetral con el
