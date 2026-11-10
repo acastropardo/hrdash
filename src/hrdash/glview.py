@@ -422,13 +422,63 @@ def _plan_window(glfw, want=(1920, 1080)):
     return size, mon
 
 
+def _window_for(glfw, mon, want=(1920, 1080)):
+    """Tamano en puntos para un monitor concreto (sin pasar de su area util)."""
+    mode = glfw.get_video_mode(mon)
+    sx = sy = 1.0
+    _x = _y = 0
+    try:
+        got = glfw.get_monitor_content_scale(mon)
+        if got and got[0]:
+            sx, sy = float(got[0]), float(got[1] or got[0])
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _x, _y, wa, ha = glfw.get_monitor_workarea(mon)
+    except Exception:  # noqa: BLE001
+        wa, ha = (mode.size.width or want[0]) / sx, (mode.size.height or want[1]) / sy
+    size = (max(640, min(int(wa), int(want[0] / sx))), max(360, min(int(ha), int(want[1] / sy))))
+    return size, (_x, _y, int(wa), int(ha))
+
+
+def _split_rect(view, i, n):
+    """Rectangulo normalizado (x, y, w, h) para el split vertical: dashboard 40%, race 60%."""
+    if n <= 1:
+        return (0.0, 0.0, 1.0, 1.0)
+    if view == "gauge":
+        return (0.0, 0.0, 0.40, 1.0)
+    if view == "pista":
+        return (0.40, 0.0, 0.60, 1.0)
+    return (i / n, 0.0, 1.0 / n, 1.0)
+
+
+def _new_anim():
+    return {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0,
+            "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0}
+
+
+def _uniq(items):
+    """Deduplica por identidad (los objetos window de GLFW no son hashables)."""
+    seen, out = [], []
+    for it in items:
+        if id(it) not in seen:
+            seen.append(id(it))
+            out.append(it)
+    return out
+
+
 # ---------------------------------------------------------------- proceso hijo
 def child_main() -> None:
-    """Entrada del proceso hijo (`python -m hrdash.glview`): ventana GLFW + render.
+    """Entrada del proceso hijo (`python -m hrdash.glview`): ventana(s) GLFW + render.
 
     Habla JSON por stdio: el dashboard escribe un snapshot por linea (stdin) y la
     ventana reporta errores por stdout. Evitamos `multiprocessing` porque con `spawn`
     macOS re-ejecuta el entry point de consola y el hijo arrancaria otro dashboard.
+
+    Con dos vistas activas: una ventana por monitor cuando hay monitores para todas
+    (cada contexto con su propio program y VAO, que son objetos por contexto); si no,
+    una sola ventana con split vertical: dashboard izquierda 40%, race derecha 60%.
+    Una sola vista activa: esa ventana es full screen.
     """
     err = None
     glfw = None
@@ -447,64 +497,113 @@ def child_main() -> None:
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE)
         glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
-        size, mon = _plan_window(glfw, (1920, 1080))
-        win = glfw.create_window(size[0], size[1], "HRDash 3D", None, None)
-        if win is None:
-            raise RuntimeError("glfw no pudo crear la ventana")
-        if mon is not None:
-            try:                                   # centrada en el monitor que la aloja
-                xa, ya, wa, ha = glfw.get_monitor_workarea(mon)
-                glfw.set_window_pos(win, int(xa + (wa - size[0]) / 2),
-                                    int(ya + (ha - size[1]) / 2))
-            except Exception:  # noqa: BLE001 - centrar es decorativo
-                pass
-        fbw, fbh = glfw.get_framebuffer_size(win)
-        _emit({"win": list(size), "fb": [fbw, fbh]})   # puntos reales y pixels del buffer
-        glfw.make_context_current(win)
-        glfw.swap_interval(1)
-        ctx = moderngl.create_context()
-        prog = ctx.program(vertex_shader=VS, fragment_shader=FS)
-        ctx.enable(moderngl.DEPTH_TEST)
+        mons = [m for m in (glfw.get_monitors() or []) if m]
+
+        def open_windows(views):
+            """(view, window, rect, ctx, prog, anim, vaos): una ventana por monitor o split."""
+            if len(views) >= 2 and len(mons) >= len(views):
+                for i, view in enumerate(views):
+                    size, (xa, ya, wa, ha) = _window_for(glfw, mons[i], (1920, 1080))
+                    win = glfw.create_window(size[0], size[1], f"HRDash 3D - {view}", mons[i], None)
+                    if win is None:
+                        raise RuntimeError("glfw no pudo crear la ventana")
+                    try:                                   # centrada en el monitor que la aloja
+                        glfw.set_window_pos(win, int(xa + (wa - size[0]) / 2),
+                                            int(ya + (ha - size[1]) / 2))
+                    except Exception:  # noqa: BLE001 - centrar es decorativo
+                        pass
+                    glfw.make_context_current(win)
+                    # con dos ventanas el vsync se pagaria dos veces por frame: aqui no esperamos
+                    glfw.swap_interval(0)
+                    # contexto por ventana: los objetos (program/VAO) pertenecen a SU contexto
+                    ctx = moderngl.create_context()
+                    _emit({"win": list(size), "fb": list(glfw.get_framebuffer_size(win)),
+                           "view": view, "rect": [0.0, 0.0, 1.0, 1.0]})
+                    yield (view, win, (0.0, 0.0, 1.0, 1.0), ctx,
+                           ctx.program(vertex_shader=VS, fragment_shader=FS), _new_anim(), {})
+            else:
+                size, mon = _plan_window(glfw, (1920, 1080))
+                win = glfw.create_window(size[0], size[1], "HRDash 3D", mon, None)
+                if win is None:
+                    raise RuntimeError("glfw no pudo crear la ventana")
+                if mon is not None:
+                    try:
+                        xa, ya, wa, ha = glfw.get_monitor_workarea(mon)
+                        glfw.set_window_pos(win, int(xa + (wa - size[0]) / 2),
+                                            int(ya + (ha - size[1]) / 2))
+                    except Exception:  # noqa: BLE001 - centrar es decorativo
+                        pass
+                glfw.make_context_current(win)
+                glfw.swap_interval(1)
+                ctx = moderngl.create_context()
+                prog = ctx.program(vertex_shader=VS, fragment_shader=FS)
+                rects = [(view, _split_rect(view, i, len(views))) for i, view in enumerate(views)]
+                _emit({"win": list(size), "fb": list(glfw.get_framebuffer_size(win)),
+                       "view": [v for v, _r in rects],
+                       "rect": [list(r) for _v, r in rects]})
+                for view, r in rects:
+                    yield (view, win, r, ctx, prog, _new_anim(), {})
+
         feed = _stdin_feed()
-        vaos: dict = {}
-        snap = {"view": "hr", "hr": 0, "hrmax": 180, "samples": [], "zone_color": "#ef4444"}
-        anim = {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0,
-                "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0}
+        snap = {"view": "gauge", "views": ["gauge"], "hr": 0, "hrmax": 180,
+                "samples": [], "zone_color": "#ef4444"}
         clock = time.time()
-        last_view, frames, report_t, work = None, 0, time.time(), 0.0
-        while not glfw.window_should_close(win):
+        slots, key = [], None
+        frames, report_t, work = 0, time.time(), 0.0
+        while True:
             t0 = time.time()
-            anim["t"] = t0 - clock
             keep, got = feed()
             if not keep:
                 break                                       # el dashboard cerro la tuberia
             if got is not None:
                 snap = got
-            w, h = glfw.get_framebuffer_size(win)
-            aspect = max(0.25, w / max(1, h))
-            view = snap.get("view", "hr")
-            fn = SCENES.get(view, scene_hr)
-            if view != last_view:                            # otra vista: tira las capas
-                last_view = view
-                for v in vaos.values():
-                    v.release()
-                vaos.clear()
-            dyn_layers, cam = fn(snap, anim, aspect)
-            for name, mesh in dyn_layers:
-                if mesh is None:
-                    continue                       # capa sin cambios: conserva su VBO
-                old = vaos.get(name)
-                if old is not None:
-                    old.release()
-                buf = ctx.buffer(np.asarray(mesh.v or [0.0] * 10, dtype="f4").tobytes())
-                vaos[name] = ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)])
-            eye, center, up, fovy = cam
-            mvp = perspective(fovy, aspect) @ look_at(eye, center, up)
-            prog["mvp"].write(np.ascontiguousarray(mvp.T, dtype="f4").tobytes())
-            ctx.clear(*FLOOR, 1.0)
-            for v in vaos.values():
-                v.render(moderngl.TRIANGLES)
-            glfw.swap_buffers(win)
+            views = [v for v in (snap.get("views") or [snap.get("view", "gauge")]) if v in SCENES]
+            if not views:
+                break
+            shape = (tuple(views), len(mons))
+            if shape != key:
+                key = shape
+                for view, win, _r, ctx, _p, _a, vaos in slots:   # release con su contexto vigente
+                    try:
+                        glfw.make_context_current(win)
+                        for va in vaos.values():
+                            va.release()
+                    except Exception:  # noqa: BLE001
+                        pass
+                for w in _uniq(s[1] for s in slots):      # window objects: no hashables
+                    try:
+                        glfw.destroy_window(w)
+                    except Exception:  # noqa: BLE001
+                        pass
+                slots = list(open_windows(views))
+            if any(glfw.window_should_close(s[1]) for s in slots):
+                err = "ventana cerrada"
+                break
+            for view, win, rect, ctx, prog, anim, vaos in slots:
+                glfw.make_context_current(win)
+                ctx.enable(moderngl.DEPTH_TEST)
+                fbw, fbh = glfw.get_framebuffer_size(win)
+                x, y = int(fbw * rect[0]), int(fbh * rect[1])
+                vw, vh = max(1, int(fbw * rect[2])), max(1, int(fbh * rect[3]))
+                ctx.scissor = (x, y, vw, vh)
+                ctx.viewport = (x, y, vw, vh)
+                ctx.clear(*FLOOR, 1.0)
+                anim["t"] = t0 - clock
+                layers, cam = SCENES[view](snap, anim, max(0.25, vw / vh))
+                for name, mesh in layers:
+                    if mesh is None:
+                        continue                       # capa sin cambios: conserva su VBO
+                    old = vaos.get(name)
+                    if old is not None:
+                        old.release()
+                    buf = ctx.buffer(np.asarray(mesh.v or [0.0] * 10, dtype="f4").tobytes())
+                    vaos[name] = ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)])
+                eye, center, up, fovy = cam
+                mvp = perspective(fovy, vw / vh) @ look_at(eye, center, up)
+                prog["mvp"].write(np.ascontiguousarray(mvp.T, dtype="f4").tobytes())
+                for va in vaos.values():
+                    va.render(moderngl.TRIANGLES)
+                glfw.swap_buffers(win)
             glfw.poll_events()
             frames += 1
             if frames >= 60:
@@ -514,10 +613,18 @@ def child_main() -> None:
                 frames, report_t, work = 0, now, 0.0
             work += time.time() - t0
             time.sleep(max(0.0, 0.02 - (time.time() - t0)))
-        for v in list(vaos.values()):
-            v.release()
-        vaos.clear()
-        glfw.destroy_window(win)
+        for view, win, _r, ctx, _p, _a, vaos in slots:
+            try:
+                glfw.make_context_current(win)
+                for va in vaos.values():
+                    va.release()
+            except Exception:  # noqa: BLE001
+                pass
+        for w in _uniq(s[1] for s in slots):
+            try:
+                glfw.destroy_window(w)
+            except Exception:  # noqa: BLE001
+                pass
     except Exception as exc:  # noqa: BLE001 - la ventana nunca tumba el dashboard
         err = f"{type(exc).__name__}: {exc}"
     finally:

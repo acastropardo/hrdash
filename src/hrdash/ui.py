@@ -58,7 +58,7 @@ def hints_text(view: str, note: str = "") -> Text:
             t.append(f"{VIEW_KEYS[v]} {VIEW_NAMES[v]}", style="bold #f8fafc")
         else:
             t.append(VIEW_KEYS[v], style="#9ca3af")
-    t.append(" · 3: ventana 3D · [ ]: largo vuelta", style="#6b7280")
+    t.append(" · 3: dashboard · r: race · [ ]: largo vuelta", style="#6b7280")
     if note:
         t.append(f" · {note}", style="bold #f97316")
     return t
@@ -87,7 +87,7 @@ class ConfigModal(ModalScreen):
     """Cambiar edad / sexo / peso / FTP sin reiniciar la sesion."""
 
     CSS = """
-    #cfgbox { width: 50; height: auto; padding: 1 2; background: $panel; border: round $brand; }
+    #cfgbox { width: 50; height: auto; padding: 1 2; background: $panel; border: round #ef4444; }
     Label { color: $text-muted; }
     Input { margin: 0 0 1 0; }
     #err { color: #ef4444; height: 1; }
@@ -148,7 +148,8 @@ class HRDash(App):
         ("w", "view_w", "Vista watts"),
         ("g", "view_gauge", "Tablero"),
         ("p", "view_pista", "Vista pista"),
-        ("3", "toggle_gl", "Ventana 3D on/off"),
+        ("3", "toggle_gl_dash", "Dashboard 3D on/off"),
+        ("r", "toggle_gl_race", "Race 3D on/off"),
         ("left", "cycle_view(-1)", "Vista anterior"),
         ("right", "cycle_view(1)", "Vista siguiente"),
         ("[", "cycle_lap(-1)", "Vuelta mas corta"),
@@ -210,7 +211,8 @@ class HRDash(App):
         self._err_round = False
         self._pulse = 0
         self.view = "hr"          # "hr" | "watts" | "gauge" | "pista": vista principal
-        self.gl = False           # True: ventana OpenGL 3D abierta (toggle global con `3`)
+        self.gl = False           # True: ventana OpenGL 3D abierta
+        self.gl_views: list[str] = []   # vistas 3D activas: "gauge" (dashboard) y "pista" (race)
         self._glhost: GLHost | None = None
         self._gl_msg = ""         # aviso de la ventana 3D (cerrada / sin dependencias)
         self._beat_t0 = time.time()
@@ -365,21 +367,36 @@ class HRDash(App):
         self.exit()
 
     # ---- ventana 3D (OpenGL nativo, en proceso aparte) ----
-    def action_toggle_gl(self) -> None:
-        """Abre o cierra la ventana OpenGL con la escena 3D de la vista activa."""
-        if self.gl and self._glhost is not None:
-            self._gl_msg = "ventana 3D cerrada"
-            self._kill_gl()
+    def action_toggle_gl_dash(self) -> None:
+        """`3`: abre o cierra la vista dashboard (cluster) en la ventana 3D."""
+        self._toggle_gl_view("gauge")
+
+    def action_toggle_gl_race(self) -> None:
+        """`r`: abre o cierra la vista race (pista, camara chase) en la ventana 3D."""
+        self._toggle_gl_view("pista")
+
+    def _toggle_gl_view(self, v: str) -> None:
+        """Toggle independiente por vista: con dos vistas, split o dos ventanas."""
+        if v in self.gl_views:
+            self.gl_views.remove(v)
+            if not self.gl_views:
+                self._gl_msg = "ventana 3D cerrada"
+                self._kill_gl()
+            else:
+                self._push_gl()
         else:
-            host = self._glhost or GLHost()
-            if host.start():
+            if not self.gl_views:
+                host = self._glhost or GLHost()
+                if not host.start():
+                    self._glhost = None
+                    self._gl_msg = host.error or "3D no disponible: pip install -e '.[gl]'"
+                    self._hints()
+                    return
                 self._glhost = host
                 self.gl = True
                 self._gl_msg = ""
-                self._push_gl()
-            else:
-                self._glhost = None
-                self._gl_msg = host.error or "3D no disponible: pip install -e '.[gl]'"
+            self.gl_views.append(v)
+            self._push_gl()
         self._hints()
 
     def _gl_snapshot(self) -> dict:
@@ -395,6 +412,7 @@ class HRDash(App):
         hrmax = int(cfg.computed_hrmax())
         return {
             "view": self.view,
+            "views": list(self.gl_views),
             "hr": hr, "watts": w, "cadence": cad, "speed": spd,
             "hrmax": hrmax, "ftp": int(cfg.ftp),
             "zone_idx": zone.idx, "zone_name": zone.name, "zone_color": zone.color,
@@ -448,6 +466,7 @@ class HRDash(App):
 
     def _kill_gl(self) -> None:
         self.gl = False
+        self.gl_views = []
         if self._glhost is not None:
             self._glhost.stop()
             self._glhost = None
