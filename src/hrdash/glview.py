@@ -1026,6 +1026,29 @@ def _new_anim():
             "trail": [], "pts": None, "static": None, "anchor": None}
 
 
+# Teclas de vista en standalone (`--3d`, sin TUI): `h/w/g/p` cambian a esa vista, `3` y `r`
+# hacen toggle. Es una funcion pura para poder afirmarla headless (en child_main no se
+# pueden sintetizar eventos de teclado sin GLFW). El zoom (`+`/`-`) no se resuelve aqui:
+# hace falta el slot, y `on_key` llama a `add_zoom`. Lo demas (q/x/s) se reenvia al motor.
+VIEWKEYS = {"h": "hr", "w": "watts", "g": "gauge", "p": "pista"}
+VIEWTOGGLE = {"3": "gauge", "r": "pista"}
+
+
+def standalone_key(name, local_views):
+    """Lista de vistas resultante, o None si la tecla no es de vista (se reenvia al motor)."""
+    if name in VIEWKEYS:
+        return [VIEWKEYS[name]]
+    if name in VIEWTOGGLE:
+        cur = list(local_views)
+        v = VIEWTOGGLE[name]
+        if v in cur:
+            cur.remove(v)
+        else:
+            cur.append(v)
+        return cur or ["gauge"]
+    return None
+
+
 def _uniq(items):
     """Deduplica por identidad (los objetos window de GLFW no son hashables)."""
     seen, out = [], []
@@ -1081,6 +1104,16 @@ def child_main() -> None:
                     glfw.KEY_LEFT_BRACKET: "[", glfw.KEY_RIGHT_BRACKET: "]",
                     glfw.KEY_MINUS: "-", glfw.KEY_EQUAL: "+"}     # `+` es KEY_EQUAL (sin shift)
         slots: list = []
+        # En standalone (`--3d`) no hay TUI: la ventana es la dueña de la vista y del zoom,
+        # y solo reenvia al motor lo que afecta a la sesion (q/x/s). `standalone` y
+        # `local_views` se comparten entre el loop (que los lee del snapshot) y `on_key`.
+        standalone = False
+        local_views: list = []
+
+        def set_views(v):
+            """Cambiar la vista en standalone y reflejarla al motor (el motor la refleja)."""
+            local_views[:] = [x for x in v if x in SCENES]
+            _emit({"views": list(local_views)})
 
         def winkey(win):
             """Clave comparable y hashable para una ventana GLFW.
@@ -1179,18 +1212,32 @@ def child_main() -> None:
                 press.pop(winkey(win), None)
 
         def on_key(win, key, _scan, action, _mods):
-            """Tecla: se reenvia a la TUI, que es la dueña de los bindings.
+            """Tecla: en modo TUI se reenvia, que la TUI es la dueña de los bindings.
 
             GLFW solo entrega teclas a la ventana enfocada, y cuando la ventana 3D esta enfocada el
             terminal deja de recibirlas: por eso el reenvio es lo que hace que `q`, `x`, `p` o `r`
             funcionen desde la ventana. Sin foco no llega nada. Se reenvia solo PRESS: con REPEAT la
             TUI recibiria una accion por cada repeticion del teclado.
+
+            En standalone (`--3d`) no hay terminal al que reenviar: la ventana resuelve aqui la
+            vista (`h/w/g/p`, `3` y `r`) y el zoom (`+`/`-`); lo demas (q/x/s) va al motor, que
+            procesa la sesion. Asi el teclado de la ventana no colisiona con el del terminal.
             """
             if action != PRESS:
                 return
             name = KEYNAMES.get(key)
-            if name:
-                _emit({"key": name})
+            if not name:
+                return
+            if standalone:
+                new = standalone_key(name, local_views)
+                if new is not None:
+                    set_views(new)
+                    return
+                if name in ("+", "-"):
+                    add_zoom(next((s for s in slots if s[0] in ZOOMABLE), None),
+                             STEP_ZOOM * (1 if name == "+" else -1))
+                    return
+            _emit({"key": name})
 
         def on_focus(win, focused):
             focus[winkey(win)] = bool(focused)
@@ -1282,6 +1329,11 @@ def child_main() -> None:
                 break                                       # el dashboard cerro la tuberia
             if got is not None:
                 snap = got
+                standalone = bool(snap.get("standalone"))
+                if standalone and not local_views and snap.get("views"):
+                    # Primera linea: la ventana hereda las vistas del motor; a partir de
+                    # aqui la ventana las cambia y se las refleja al motor por stdout.
+                    local_views[:] = [v for v in snap["views"] if v in SCENES]
                 for v, z in (snap.get("zoom") or {}).items():   # zoom fijado desde fuera
                     if v in ZOOMABLE and isinstance(z, (int, float)) and zoom.get(v) != float(z):
                         zoom[v] = min(ZOOM_MAX, max(ZOOM_MIN, float(z)))

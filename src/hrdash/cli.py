@@ -5,15 +5,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-import time
 
 from . import __version__
 from .ble import (SensorSource, SimSensor, TrainerSource, probe,
                   scan_heart_rate_sensors, scan_trainers)
 from .config import Config, load_config, prompt_interactive, save_config
-from .export import export_session
+from .engine import Engine, SCENES_VIEWS
 from .history import Session
-from .laps import LapTracker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,14 +34,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--trainer", metavar="NOMBRE_O_ADDR",
                    help="rodillo (Tacx): nombre o direccion (default: autoscaneo)")
     p.add_argument("--no-trainer", action="store_true", help="no buscar rodillo")
-    p.add_argument("--scan", nargs="?", const=8, type=int, metavar="SEG",
-                   help="listar sensores de FC y rodillos detectados y salir")
-    p.add_argument("--probe", nargs="?", const=12, type=int, metavar="SEG",
-                   help="volcar GATT y payloads del dispositivo (--trainer/--sensor) y salir")
+    # Las rutas de salida son excluyentes con --3d: es su propio modo, sin TUI, y no
+    # puede ir con --scan/--probe/--duration para que no colisionen con la consola.
+    # --simulate si se combina (fuera del grupo): es la fuente, no una ruta.
+    modes = p.add_mutually_exclusive_group()
+    modes.add_argument("--scan", nargs="?", const=8, type=int, metavar="SEG",
+                       help="listar sensores de FC y rodillos detectados y salir")
+    modes.add_argument("--probe", nargs="?", const=12, type=int, metavar="SEG",
+                       help="volcar GATT y payloads del dispositivo (--trainer/--sensor) y salir")
+    modes.add_argument("--duration", type=int, metavar="SEG",
+                       help="modo headless: muestrear N segundos, grabar y salir")
+    modes.add_argument("--3d", dest="threed", action="store_true",
+                       help="3D standalone: motor + ventana GLFW, sin TUI; las teclas de la "
+                            "ventana no colisionan con el terminal")
     p.add_argument("--simulate", action="store_true",
                    help="sensor+rodillo simulados (sin BLE) para probar el dashboard")
-    p.add_argument("--duration", type=int, metavar="SEG",
-                   help="modo headless: muestrear N segundos, grabar y salir")
+    p.add_argument("--3d-view", choices=list(SCENES_VIEWS), action="append",
+                   metavar="VISTA", help="vistas del modo --3d (default: gauge)")
     p.add_argument("--export-dir", help="carpeta de exportacion (default ./exportes)")
     p.add_argument("--no-fit", action="store_true", help="no grabar archivo FIT")
     p.add_argument("--no-csv", action="store_true", help="no grabar CSV espejo")
@@ -101,52 +108,37 @@ async def cmd_scan(seconds: int) -> int:
 
 
 async def cmd_headless(hr_source, tr_source, cfg: Config, duration: int) -> int:
-    sess = Session(cfg)
-    laps = LapTracker(cfg.lap_m, cfg)
-    stop = asyncio.Event()
-    tasks = [asyncio.create_task(hr_source.run(stop))]
-    if tr_source is not None:
-        tasks.append(asyncio.create_task(tr_source.run(stop)))
+    eng = Engine(hr_source, tr_source, cfg)
+    eng.start()
     print(f"Headless {duration}s · FC={hr_source.name}"
           + (f" · rodillo={tr_source.name}" if tr_source else ""))
     try:
         for i in range(duration):
             await asyncio.sleep(1.0)
-            hr = getattr(hr_source, "latest_hr", None)
-            if hr is None:
+            s, closed = eng.poll()
+            if s is None:
                 print(f"[{i+1:3d}s] esperando FC... {getattr(hr_source, 'error', '')}")
                 continue
-            w = getattr(tr_source, "watts", None) if tr_source else None
-            cad = getattr(tr_source, "cadence", None) if tr_source else None
-            spd = getattr(tr_source, "speed_kmh", None) if tr_source else None
-            dist = getattr(tr_source, "dist_m", None) if tr_source else None
-            s = sess.add(hr, watts=w, cadence=cad, speed_kmh=spd, dist_m=dist)
-            closed = laps.add(s)
-            print(f"[{i+1:3d}s] FC={hr:3d} Z{s.zone_idx} · {w or '-':>4} W · "
-                  f"{spd if spd is not None else '-':>5} km/h · "
-                  f"{cad if cad is not None else '-':>5} rpm · "
-                  f"{(dist or 0)/1000:5.2f} km · media={sess.avg_hr:5.1f} · "
-                  f"kcal={sess.total_kcal:5.2f} · "
+            print(f"[{i+1:3d}s] FC={s.hr:3d} Z{s.zone_idx} · "
+                  f"{s.watts if s.watts is not None else '-':>4} W · "
+                  f"{s.speed_kmh if s.speed_kmh is not None else '-':>5} km/h · "
+                  f"{s.cadence if s.cadence is not None else '-':>5} rpm · "
+                  f"{(s.dist_m or 0)/1000:5.2f} km · "
+                  f"media={eng.session.avg_hr:5.1f} · "
+                  f"kcal={eng.session.total_kcal:5.2f} · "
                   f"{'OK' if hr_source.connected else 'reconectando FC'}")
             if closed:
-                print(f"        ⚑ vuelta {len(laps.laps)} en {closed.elapsed_s}s · "
+                print(f"        ⚑ vuelta {len(eng.laps.laps)} en {closed.elapsed_s}s · "
                       f"media {closed.avg_hr:.0f} bpm · {closed.avg_watts:.0f} W")
     finally:
-        stop.set()
-        for t in tasks:
-            t.cancel()
-        for t in tasks:
-            try:
-                await t
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
-    res = export_session(sess, cfg, hr_source.name)
-    print_summary(sess, res)
-    if sess.n:
-        print(f"  vueltas de {cfg.lap_m} m: {len(laps.laps)} cerradas · "
-              f"en curso {laps.pos_m} m"
-              + (" (distancia estimada por velocidad)" if laps.estimada else ""))
-    return 0 if sess.n else 2
+        await eng.stop()
+    res = eng.export()
+    print_summary(eng.session, res)
+    if eng.session.n:
+        print(f"  vueltas de {cfg.lap_m} m: {len(eng.laps.laps)} cerradas · "
+              f"en curso {eng.laps.pos_m} m"
+              + (" (distancia estimada por velocidad)" if eng.laps.estimada else ""))
+    return 0 if eng.session.n else 2
 
 
 def print_summary(sess: Session, res: dict) -> None:
@@ -189,6 +181,107 @@ def cmd_tui(hr_source, tr_source, cfg: Config) -> int:
     return 0
 
 
+async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None = None,
+                 host=None) -> int:
+    """`--3d`: motor + ventana, sin TUI. No hay terminal al que reenviar teclas.
+
+    El motor es el dueño del estado (Session/LapTracker/export); la ventana es un proceso
+    hijo que habla JSON por tuberia (proto.py). La ventana gestiona aqui su teclado y su
+    camara: `h/w/g/p` y `3`/`r` cambian la vista, `+`/`-` y la rueda hacen zoom. Lo que
+    afecta a la sesion se reenvia y lo procesa el motor: `q` sale y graba, `x` resetea,
+    `s` reconecta. Con TUI la dueña de los bindings sigue siendo `ui.py`; este camino no
+    toca la TUI, y por eso no colisionan.
+
+    Si la ventana cae, el muestreo sigue (la app no muere por un fallo de render) y al
+    salir se exporta igual que en la TUI: CSV antes que FIT.
+    """
+    from .glview import GLHost
+    host = host or GLHost()
+    eng = Engine(hr_source, tr_source, cfg)
+    eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
+    if not host.start():
+        print(f"3D: {host.error or '3D no disponible: pip install -e \".[gl]\"'}")
+        return 2
+    eng.start()
+    print(f"3D standalone · vistas: {'+'.join(eng.views)} · FC={getattr(hr_source, 'name', '')}"
+          + (f" · rodillo={getattr(tr_source, 'name', '')}" if tr_source else "")
+          + " · `q` en la ventana o Ctrl+C para salir y grabar")
+    warned = False
+    quit_now = False
+    opened = False        # primer mensaje `win` del hijo: la ventana existe
+    never_opened = False  # err antes de win: sin display, esta ruta no tiene sentido
+    try:
+        while seconds is None or seconds > 0:
+            await asyncio.sleep(1.0)
+            s, closed = eng.poll()
+            if seconds is not None:
+                seconds -= 1
+            try:
+                host.push(eng.snapshot())
+            except Exception as exc:  # noqa: BLE001 - la ventana no interrumpe el muestreo
+                if not warned:
+                    print(f"3D push: {type(exc).__name__}: {exc}"[:80])
+                    warned = True
+            for m in host.drain():
+                if m.get("win"):
+                    opened = True
+                if m.get("key") and eng.handle_key(m["key"]):
+                    quit_now = True
+                    break
+                got = m.get("views")
+                if isinstance(got, list):
+                    eng.views = [v for v in got if v in SCENES_VIEWS] or eng.views
+                if m.get("err"):
+                    if not opened:
+                        print(f"3D: {m['err']}"[:80])
+                        never_opened = True
+                        break
+                    if not warned:
+                        print(f"3D: {m['err']}"[:80])
+                        warned = True
+            if quit_now or never_opened:
+                break
+            if not host.alive():
+                if not opened:
+                    never_opened = True
+                    break    # murio sin llegar a abrir: nada que mostrar, salir
+                if not warned:
+                    print("3D: ventana cerrada; el motor sigue muestreando hasta Ctrl+C")
+                    warned = True
+                if seconds is None:
+                    break        # sin ventana y sin limite: no hay nada que mostrar
+    except KeyboardInterrupt:
+        print("\n3D: Ctrl+C, grabando...")
+    finally:
+        await eng.stop()
+        host.stop()
+    res = eng.export()
+    print_summary(eng.session, res)
+    persist_last(eng.hr, eng.tr, cfg)
+    return 2 if never_opened or not eng.session.n else 0
+
+
+def persist_last(hr_source, tr_source, cfg: Config) -> None:
+    """Guarda el ultimo sensor/rodillo usado (lo mismo que hace la TUI al salir)."""
+    changed = False
+    if getattr(hr_source, "name", "") and not isinstance(hr_source, SimSensor) \
+            and getattr(hr_source, "connected", False):
+        cfg.last_device = hr_source.name
+        changed = True
+    if tr_source is not None and not isinstance(tr_source, SimSensor) \
+            and getattr(tr_source, "connected", False):
+        cfg.last_trainer = tr_source.name
+        changed = True
+    if changed:
+        save_config(cfg)
+
+
+async def _probe_wrapper(target, seconds: int, trainer: bool) -> int:
+    print(f"Probe {'rodillo' if trainer else 'banda'}: buscando...", flush=True)
+    await probe(target=target, seconds=seconds, trainer=trainer)
+    return 0
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config()
@@ -223,16 +316,16 @@ def main(argv=None) -> int:
     if args.duration:
         return asyncio.run(cmd_headless(hr_source, tr_source, cfg, args.duration))
 
+    if args.threed:
+        # Standalone: no hace falta TTY para el motor; la ventana la pone el proceso hijo.
+        # Si el entorno no da para GL, cmd_3d avisa y sale con 2 (la TUI no se toca).
+        # El dest de "--3d-view" es "3d_view", no un identificador valido: getattr.
+        return asyncio.run(cmd_3d(hr_source, tr_source, cfg, getattr(args, "3d_view")))
+
     if not sys.stdout.isatty():
         print("La TUI necesita un terminal interactivo. Usa --duration para modo headless.")
         return 2
     return cmd_tui(hr_source, tr_source, cfg)
-
-
-async def _probe_wrapper(target, seconds: int, trainer: bool) -> int:
-    print(f"Probe {'rodillo' if trainer else 'banda'}: buscando...", flush=True)
-    await probe(target=target, seconds=seconds, trainer=trainer)
-    return 0
 
 
 if __name__ == "__main__":
