@@ -41,7 +41,8 @@ SPD_COLOR = "#22d3ee"
 CAD_COLOR = "#a78bfa"
 GLYPH8 = " ▁▂▃▅▆▇█"
 # orden de las vistas para navegar con las flechas
-VIEWS = ["hr", "watts", "gauge", "pista"]
+# orden de las vistas para navegar con las flechas (mismo orden que standalone_key)
+VIEWS = list(proto.VIEW_ORDER)
 VIEW_KEYS = {"hr": "h", "watts": "w", "gauge": "g", "pista": "p"}
 VIEW_NAMES = {"hr": "FC", "watts": "watts", "gauge": "tablero", "pista": "pista"}
 # presets del largo de vuelta para la vista pista (se recorren con [ y ])

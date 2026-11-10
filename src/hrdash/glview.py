@@ -22,6 +22,8 @@ from __future__ import annotations
 import math
 import time
 
+from .proto import VIEW_ORDER
+
 VS = """#version 330
 in vec3 in_position; in vec3 in_normal; in vec3 in_color; in float in_light;
 out vec3 v_color; out vec3 v_normal; out float v_light; out vec3 v_world;
@@ -1035,7 +1037,12 @@ VIEWTOGGLE = {"3": "gauge", "r": "pista"}
 
 
 def standalone_key(name, local_views):
-    """Lista de vistas resultante, o None si la tecla no es de vista (se reenvia al motor)."""
+    """Lista de vistas resultante, o None si la tecla no es de vista (se reenvia al motor).
+
+    `h/w/g/p` cambian a esa vista, `3` y `r` hacen toggle, y `left`/`right` recorren el
+    mismo orden que la consola (VIEW_ORDER): con una sola vista se pasa a la siguiente,
+    con varias se cambia la primera sin perder las demas.
+    """
     if name in VIEWKEYS:
         return [VIEWKEYS[name]]
     if name in VIEWTOGGLE:
@@ -1046,6 +1053,11 @@ def standalone_key(name, local_views):
         else:
             cur.append(v)
         return cur or ["gauge"]
+    if name in ("left", "right"):
+        cur = [v for v in local_views if v in VIEW_ORDER] or ["gauge"]
+        i = VIEW_ORDER.index(cur[0]) if cur[0] in VIEW_ORDER else 0
+        nxt = VIEW_ORDER[(i + (1 if name == "right" else -1)) % len(VIEW_ORDER)]
+        return [nxt] + [v for v in cur[1:] if v != nxt]
     return None
 
 

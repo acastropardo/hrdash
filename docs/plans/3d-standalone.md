@@ -28,8 +28,11 @@ siendo la fuente (no una ruta) y se puede combinar con `--3d`.
    y el motor. Las capas de escena son serializables (`layers_to_json`) por si algun dia
    hay otro backend. Version de protocolo: `PROTOCOL = 1`.
 4. Reparto de teclas en standalone: la ventana gestiona localmente la vista (`h/w/g/p`,
-   `3`/`r`) y el zoom (`+`/`-` y la rueda); lo que afecta a la sesion (`q`, `x`, `s`) se
-   reenvia y lo procesa el motor. Con TUI la dueña de los bindings sigue siendo `ui.py`.
+   `3`/`r` y `left`/`right`, que recorren el mismo orden que la consola) y el zoom (`+`/`-`
+   y la rueda); lo que afecta a la sesion (`q`, `x`, `s`) se reenvia y lo procesa el
+   motor. Con TUI la dueña de los bindings sigue siendo `ui.py`. El orden de recorrido es
+   `proto.VIEW_ORDER` (fuente unica: la TUI lo usa para `← →` y `standalone_key` para la
+   ventana). Con varias vistas abiertas, la flecha cambia la primera sin perder las demas.
    `[ ]` no hace nada en standalone: el largo de vuelta se fija con `--lap` al arrancar.
 5. Robustez como hoy: si la ventana cae en marcha, el motor sigue muestreando y exporta
    al salir (CSV antes que FIT). Si la ventana **no abre nunca** (`err` antes de `win`),
@@ -64,8 +67,8 @@ siendo la fuente (no una ruta) y se puede combinar con `--3d`.
     `x` (resetea Session+LapTracker) y `s` (reconecta), el mensaje `views` desde la
     ventana, ventana caida en marcha (sigue muestreando y exporta con 0), ventana que no
     abre (exit 2 pero exporta), host que no arranca (exit 2), exclusividad argparse, y
-    `standalone_key` (h/w/g/p cambian, 3/r toggle, q/x se reenvian). El export se valida
-    con el round-trip FIT (`validate`) en todos los casos.
+    `standalone_key` (h/w/g/p cambian, 3/r toggle, left/right en el orden de la consola,
+    q/x se reenvian). El export se valida con el round-trip FIT (`validate`) en todos.
   - Proceso real (maquina con display): una linea JSON con `standalone` y dos vistas ->
     `win` con las dos vistas, EOF -> exit 0, sin huerfanos. La ventana no se puede
     afirmar headless.

@@ -23,6 +23,10 @@ import json
 
 PROTOCOL = 1
 
+# Orden de recorrido con las flechas, igual en la consola y en standalone (ui.py lo usa
+# para `← →` y glview para el ciclo en la ventana).
+VIEW_ORDER = ("hr", "watts", "gauge", "pista")
+
 # Claves del snapshot y su tipo esperado (list = lista, "num" = int o float,
 # "pair" = pareja de numeros). Las que faltan o vienen con otro tipo se reportan.
 SNAPSHOT_KEYS = {
