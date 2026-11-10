@@ -1,6 +1,6 @@
 # Plan: --3d standalone (motor separado de la consola)
 
-Estado en `origin/main`: `e4c7d46`. Este fichero es la copia **controlada** del plan de
+Estado en `origin/main`: `1cbf828`. Este fichero es la copia **controlada** del plan de
 trabajo: se actualiza con cada fase y se commita junto con el codigo que la implementa.
 
 ## Contexto
