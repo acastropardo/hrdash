@@ -55,6 +55,7 @@ CHASE_DIST = 2.4                    # chase por defecto; la rueda acerca hasta p
 ZOOM_MIN, ZOOM_MAX = 0.20, 6.0
 STEP_ZOOM = 0.18                    # salto por notch de rueda
 ZOOMABLE = ("pista",)               # unicas vistas con camara configurable por rueda
+TRAIL_T = 1.2                       # segundos de estela (se desvanece, no persigue al rider parado)
 ZCOLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
 
 A0, SWEEP = 225.0, 270.0            # barrido del dial (igual que gauges.py)
@@ -441,36 +442,45 @@ def scene_pista(snap, anim, aspect=1.6):
         m.box(0.0, -cy + (i - 2.5) * 0.16, 0.06, 0.9, 0.15, 0.05,
               META if i % 2 == 0 else (0.05, 0.06, 0.08))
     lap_m = max(100, int(snap.get("lap_m") or 5000))
-    spd = float(snap.get("speed") or 0.0)
     frac = float(snap.get("lap_frac") or 0.0)
     anim["dt"] = min(0.2, max(0.0, anim["t"] - anim.get("last", 0.0))) or 0.02
     anim["last"] = anim["t"]
-    anim["frac"] = (anim.get("frac", frac) + (spd / 3.6) * anim["dt"] / lap_m) % 1.0
+    # Inercia: la telemetria no cambia de golpe. 3,0 m/s^2 para acelerar, 2,5 para frenar
+    # y +/-40 rpm/s de cadencia. Si el rider para antes de meta, desacopla y se queda.
+    spd = max(0.0, float(snap.get("speed") or 0.0) / 3.6)
+    cad = max(0.0, float(snap.get("cadence") or 0.0))
+    dv, dc = spd - anim["v"], cad - anim["c"]
+    anim["v"] += min(dv, 3.0 * anim["dt"]) if dv > 0 else max(dv, -2.5 * anim["dt"])
+    anim["c"] += min(dc, 40.0 * anim["dt"]) if dc > 0 else max(dc, -40.0 * anim["dt"])
+    anim["frac"] = (anim["frac"] + anim["v"] * anim["dt"] / lap_m) % 1.0
     if abs(anim["frac"] - frac) > 0.3:                          # vuelta cerrada: no rebobinar
         anim["frac"] = frac
+    anim["crank"] = anim["crank"] + (anim["c"] / 60.0) * 2 * math.pi * anim["dt"]
     col = _hex(snap.get("zone_color") or "#22d3ee")
-    n = len(pts) - 1
-    for q in range(9, 0, -1):
-        f = (anim["frac"] - q * 0.007) % 1.0
-        x, y = _at(pts, f)
-        # streak fino sobre el asfalto (no columna: desde la camara tapa el cuadro)
-        m.box(x, y, 0.025, 0.14, 0.14, 0.03, tuple(c * (1.0 - q / 14.0) for c in col))
-    idx = min(n, max(0, int(anim["frac"] * n)))
-    bx, by, btx, bty = pts[idx]
+    bx, by, btx, bty = _at(pts, anim["frac"])
     bl = math.hypot(btx, bty) or 1.0
     fx, fy = btx / bl, bty / bl
-    cad = float(snap.get("cadence") or 0.0)
-    anim["crank"] = anim.get("crank", 0.0) + (cad / 60.0) * 2 * math.pi * anim["dt"]
     cb, sb = math.cos(BANK), math.sin(BANK)
     nx, ny = -fy, fx                                   # normal horizontal (exterior)
     up = (nx * cb, ny * cb, sb)                        # normal de la superficie peraltada
     lat = (-up[2] * fy, up[2] * fx, up[1] * fy - up[0] * fx)
     ll = math.sqrt(lat[0] * lat[1] + lat[2] * lat[2]) or 1.0
     lat = (lat[0] / ll, lat[1] / ll, lat[2] / ll)
-    dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
-    pov = dist < 0.5
     fwd = (fx, fy, 0.0)
     base = (bx, by, sb * 0.46)                         # apoyo sobre el asfalto peraltado
+    # Estela por posiciones reales: al pararse deja de crecer y se desvanece (no avanza
+    # por detrás de un rider que ya esta quieto).
+    tr = anim["trail"]
+    if not tr or math.hypot(base[0] - tr[-1][1][0], base[1] - tr[-1][1][1]) >= 0.01:
+        tr.append((anim["t"], base))
+    while tr and (anim["t"] - tr[0][0] > TRAIL_T or len(tr) > 24):
+        tr.pop(0)
+    for tt, p in tr:
+        fade = max(0.12, 1.0 - (anim["t"] - tt) / TRAIL_T)
+        m.box(p[0], p[1], p[2] + 0.012, 0.14, 0.14, 0.03,
+              tuple(c * (0.15 + 0.85 * fade) for c in col))
+    dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
+    pov = dist < 0.5
     _rider(m, base, fwd, up, lat, anim["crank"], col, pov=pov)
     # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici;
     # al cerrar el zoom sube al casco (primera persona). Alturas medidas en `up`.
@@ -484,8 +494,14 @@ def scene_pista(snap, anim, aspect=1.6):
 
 
 def _at(pts, f):
-    i = min(len(pts) - 1, max(0, int(f * (len(pts) - 1))))
-    return pts[i][0], pts[i][1]
+    """Punto (x, y, tangente) en la fraccion `f` del trazado, interpolado entre muestras:
+    sin interpolacion el rider salta de indice en indice y la estela se corta."""
+    n = len(pts) - 1
+    i = min(n - 1, max(0, int(f * n)))
+    k = f * n - i
+    x0, y0, tx0, ty0 = pts[i]
+    x1, y1, _tx1, _ty1 = pts[i + 1]
+    return (x0 + (x1 - x0) * k, y0 + (y1 - y0) * k, tx0, ty0)
 
 
 SCENES = {"hr": scene_hr, "watts": scene_watts, "gauge": scene_gauge, "pista": scene_pista}
@@ -573,7 +589,7 @@ def _split_rect(view, i, n):
 
 def _new_anim():
     return {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0,
-            "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0, "crank": 0.0}
+            "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0, "crank": 0.0, "trail": []}
 
 
 def _uniq(items):
