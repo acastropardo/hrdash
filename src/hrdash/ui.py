@@ -58,7 +58,8 @@ def hints_text(view: str, note: str = "") -> Text:
             t.append(f"{VIEW_KEYS[v]} {VIEW_NAMES[v]}", style="bold #f8fafc")
         else:
             t.append(VIEW_KEYS[v], style="#9ca3af")
-    t.append(" · 3: dashboard · r: race (rueda: zoom) · [ ]: largo vuelta", style="#6b7280")
+    t.append(" · 3: dashboard · r: race (rueda: zoom, arrastre: orbita) · [ ]: largo vuelta",
+             style="#6b7280")
     if note:
         t.append(f" · {note}", style="bold #f97316")
     return t

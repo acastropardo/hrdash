@@ -44,6 +44,9 @@ trabajo: se actualiza con cada fase y se commita junto con el codigo que la impl
    luz calida de dos fuentes + ambiente hemisferico + niebla, charco de luz horneado por
    vertice y sombra de contacto. Pendiente: veta de tablon por textura (ahora es tono por banda)
    y sombras reales.
+6. Camara orbitable con raton/touchpad — **hecha** (arrastre con boton = yaw/tilt, dos dedos en
+   horizontal = yaw, clic derecho = centrar). Falta confirmar con raton y trackpad fisicos: los
+   callbacks se comprueban inyectando eventos sinteticos, no con el gesto real.
 
 ## Motor de render: hace falta Unity?
 
@@ -78,6 +81,18 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   (z-fighting). Solucion: `lift` de 4..12 mm en `_surf`/`ribbon`. Con color por vertice
   (`vquad`) la gradacion del charco de luz es suave; con un color por cuadro salia en
   "ladrillos" (una linea cada metro de cuerda).
+- Las ventanas de GLFW son `c_void_p`: no son hashables (no pueden ser clave de `press`) y cada
+  callback recibe su propia instancia, distinta de la que devolvio `create_window` aunque apunten a
+  la misma ventana, asi que `is` fallaba en el hit-test. Con una sola vista se sortea por
+  `len(mine) == 1` (por eso la rueda funcionaba); con split o con arrastre hay que comparar el
+  `value` -> `winkey()`/`same_win()`.
+- El click que enfoca la ventana no debe mover la camara: `on_button` solo ancla el punto y el
+  gesto empieza en el movimiento siguiente. En MacOS el primer click sobre la ventana suele ser el
+  que la enfoca (GLFW no entrega eventos de boton a una ventana sin foco), asi que hay que clicar
+  una vez y despues arrastrar.
+- El topete se aplica sobre el valor nuevo, no sobre el actual: si el tilt ya estaba en el topete,
+  comprobar antes de sumar permitia seguir empujando y el valor se salia (la camara se quedaba
+  pegada arriba, sin poder volver).
 
 ## Estado de la implementacion
 
@@ -159,6 +174,20 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   del casco) y pitch 0,55 rad; con el pitch del chase el manillar y la rueda delantera salian
   fuera del encuadre. El `roll` de la rueda gira por distancia recorrida (arco/radio), no por
   cadencia, asi que los radios se paran cuando para el rider.
+- Camara orbitable (fase 6): `STEP_LOOK 0,011` rad/px de arrastre, `STEP_LOOK_SCROLL 0,13`
+  rad/unidad de scroll horizontal, `LOOK_SMOOTH 7,0` 1/s de inercia (los eventos de arrastre llegan
+  a 60-120 Hz y el frame va a ~50 fps; sin suavizado el gesto sacude el encuadre, se integra con el
+  `dt` real del loop), topetes `LOOK_MAX_YAW = pi` / `LOOK_MAX_TILT = 0,45` y `LOOK_MIN_H = 0,15`
+  (el ojo no puede quedar por debajo del tablon). En chase gira el rig completo (ojo + mira)
+  alrededor del torso del rider, no solo la mira: girando solo la mirada, con el yaw por encima de
+  80 grados el rider salia del cuadro y la camara miraba la grada. En POV el arrastre es giro de
+  cabeza (el ojo no se mueve: orbitar un ojo a 0,3 m del casco es un circulo de 12 cm). Signos:
+  `tilt` positivo sube el ojo en chase y mira arriba en POV. El hijo reporta `look` en el mensaje
+  de fps y acepta `snap["look"]` desde fuera, igual que el zoom, por eso se puede probar sin raton.
+  Renders con look aplicado: `v15_look.png` (yaw 1,2 / tilt 0,3, el rider sigue en el cuadro),
+  `v15_low.png` (tilt -0,45, el guard mantiene el ojo sobre el tablon) y `v15_pov.png` (giro de
+  cabeza). El render neutro con look [0,0] es byte-identico a `v14_curve.png` -> no hay regresion
+  de encuadre. Hint de la TUI: `r: race (rueda: zoom, arrastre: orbita)`.
 
 ## Proximos pasos
 
@@ -188,6 +217,15 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   deducir el tamano del propio read; y `readline()` sobre un stdout no bloqueante levanta
   `BlockingIOError` en lugar de devolver
   `None`; hay que capturarla o el script cuelga.
+- `look_check.py` (camino del arrastre sin raton real): como los eventos del sistema no se pueden
+  sintetizar, se sustituyen los setters de callback por un registro y el harness invoca el callback
+  con coordenadas inventadas, con `get_cursor_pos` fijado a un valor conocido (con el valor real el
+  ancla del arrastre es unpredictable y el test no se puede afirmar). Cubre seis bloques de 60
+  frames, uno por gesto, y lee el `look` que reporta el mensaje de fps de cada bloque: clic sin
+  mover -> [0,0]; arrastre -> `STEP_LOOK * delta`; clic derecho -> centrado; scroll horizontal ->
+  `STEP_LOOK_SCROLL * dx`; scroll vertical -> zoom; empujar el tilt 100 veces -> se queda en el
+  topete. El gesto real no se puede confirmar con un raton o un trackpad fisicos (y el arrastre
+   exige que la ventana este enfocada), solo con esta via.
 - Proceso real: una linea JSON por stdin, mensajes `win`/`err`/`fps` por stdout; se comprueba
   que el layout cambia on the fly, que sale con exit 0 y que no quedan procesos huerfanos.
 - TUI: `3` y `r` (toggles independientes), `p` intacto, `x` reset, `c` abre el modal sin crash.

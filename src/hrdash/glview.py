@@ -105,6 +105,18 @@ CHASE_DIST = 2.4                    # chase por defecto; la rueda acerca hasta p
 ZOOM_MIN, ZOOM_MAX = 0.20, 6.0
 STEP_ZOOM = 0.18                    # salto por notch de rueda
 ZOOMABLE = ("pista",)               # unicas vistas con camara configurable por rueda
+LOOKABLE = ("pista",)               # unicas vistas que se pueden orbitar con el arrastre
+
+# Camara con el raton/touchpad. El touchpad de MacOS no expone gestos de pinza ni rotacion a
+# GLFW: lo unico que llega son eventos de scroll, asi que dos dedos en horizontal = orbita y en
+# vertical = zoom. El arrastre con boton es el otro camino, y hace falta que la ventana este
+# enfocada (GLFW no entrega eventos de boton a una ventana sin foco).
+STEP_LOOK = 0.011                   # rad por pixel de arrastre
+STEP_LOOK_SCROLL = 0.13             # rad por unidad de scroll horizontal (dos dedos)
+LOOK_SMOOTH = 7.0                   # inercia de la orbita (1/s): el gesto no sacuda el encuadre
+LOOK_MAX_YAW, LOOK_MAX_TILT = math.pi, 0.45
+LOOK_MIN_H = 0.15                   # el ojo no puede quedar por debajo del tablon
+PRESS, RELEASE = 1, 0               # glfw.ACTION_PRESS / glfw.ACTION_RELEASE (no estan en el paquete)
 TRAIL_T = 1.2                       # segundos de estela (se desvanece, no persigue al rider parado)
 ZCOLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
 
@@ -419,6 +431,20 @@ def look_at(eye, center, up=(0.0, 0.0, 1.0)):
     m[0, :3], m[1, :3], m[2, :3] = rx, ry, fz
     m[0, 3], m[1, 3], m[2, 3] = -(rx @ e), -(ry @ e), -(fz @ e)
     return m
+
+
+def _rot(v, axis, a):
+    """Rotacion de un vector alrededor de un eje (Rodrigues).
+
+    La orbita se hace girando el rig completo (ojo + mira) alrededor del rider, no solo la mira:
+    girando solo la mirada, en cuanto el yaw pasa de ~80 grados el rider sale del cuadro y la
+    camara se pone a mirar la grada. Girando el rig se conserva el encuadre.
+    """
+    c, s = math.cos(a), math.sin(a)
+    d = axis[0] * v[0] + axis[1] * v[1] + axis[2] * v[2]
+    cr = (axis[1] * v[2] - axis[2] * v[1], axis[2] * v[0] - axis[0] * v[2],
+          axis[0] * v[1] - axis[1] * v[0])
+    return tuple(v[i] * c + cr[i] * s + axis[i] * d * (1.0 - c) for i in range(3))
 
 
 def orbit(t, radius, height, speed=0.25, phase=0.0, center=(0.0, 0.0, 0.5), aspect=1.6):
@@ -854,11 +880,24 @@ def scene_pista(snap, anim, aspect=1.6):
     dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
     pov = dist < 0.5
     _rider(m, base, fwd, up, lat, anim["crank"], anim["roll"], col, pov=pov)
+
+    # Inercia de la orbita: los eventos de arrastre llegan a 60-120 Hz y el frame va a ~50 fps;
+    # sin suavizado el gesto sacude el encuadre. `anim["dt"]` es el paso real del loop.
+    kk = min(1.0, LOOK_SMOOTH * anim["dt"])
+    anim["yaw"] += (anim["yaw_t"] - anim["yaw"]) * kk
+    anim["tilt"] += (anim["tilt_t"] - anim["tilt"]) * kk
+    yaw, tilt = anim["yaw"], anim["tilt"]
+    pax = tuple(-x for x in lat)                 # eje de cabeceo de la camara
+
     if pov:
         # 1a persona: la camara esta dentro del casco (a la altura de los ojos, no de la
         # cumbrera) y mira unos 31 grados hacia abajo, que es lo que mete manillar y rueda
         # delantera en el cuadro. Con el pitch del chase la bici queda fuera del encuadre.
         fovy, pitch, eh, s0, ahead = 1.22, 0.55, 1.15, HEAD[0] - 0.05, 3.2
+        # Aqui el arrastre es giro de cabeza: el ojo no se mueve, porque orbitar un ojo apoyado
+        # a 0,3 m del casco es un circulo de 12 cm. `tilt` positivo = mirar arriba.
+        eye = tuple(base[j] + fwd[j] * s0 + up[j] * eh for j in range(3))
+        gaze = _rot(_rot(tuple(fwd[j] - pitch * up[j] for j in range(3)), up, yaw), pax, -tilt)
     else:
         # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici;
         # al cerrar el zoom sube al casco (primera persona). Alturas medidas en `up`.
@@ -870,8 +909,19 @@ def scene_pista(snap, anim, aspect=1.6):
         eh = HEAD[1] + 0.03 + 0.40 * k
         ahead = max(4.0, dist * 1.9)
         s0 = -dist
-    eye = tuple(base[j] + fwd[j] * s0 + up[j] * eh for j in range(3))
-    center = tuple(base[j] + fwd[j] * (s0 + ahead) + up[j] * (eh - ahead * pitch) for j in range(3))
+        # El rig (ojo y mira) gira alrededor del torso del rider: `tilt` positivo sube el ojo y la
+        # mira cae con el mismo angulo, que es lo que mantiene al rider en el cuadro al orbitar.
+        pivot = tuple(base[j] + up[j] * HEAD[1] * 0.5 for j in range(3))
+        rig0 = tuple(-fwd[j] * dist + up[j] * (eh - HEAD[1] * 0.5) for j in range(3))
+        eye = tuple(pivot[j] + _rot(_rot(rig0, up, yaw), pax, tilt)[j] for j in range(3))
+        # El arrastre no puede meter el ojo por debajo del tablon: en la recta un tilt negativo
+        # lo hundia, y en la curva ya lo sube el peralte.
+        h = sum(up[j] * (eye[j] - base[j]) for j in range(3))
+        if h < LOOK_MIN_H:
+            eye = tuple(eye[j] + up[j] * (LOOK_MIN_H - h) for j in range(3))
+        gaze = _rot(_rot(tuple(fwd[j] - pitch * up[j] for j in range(3)), up, yaw), pax, tilt)
+
+    center = tuple(eye[j] + gaze[j] * ahead for j in range(3))
     return layers + [("frame", m)], (eye, center, (0.0, 0.0, 1.0), fovy, 300.0)
 
 
@@ -972,6 +1022,7 @@ def _split_rect(view, i, n):
 def _new_anim():
     return {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0,
             "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0, "crank": 0.0, "roll": 0.0,
+            "yaw": 0.0, "yaw_t": 0.0, "tilt": 0.0, "tilt_t": 0.0,
             "trail": [], "pts": None, "static": None, "anchor": None}
 
 
@@ -1017,35 +1068,115 @@ def child_main() -> None:
         glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
         mons = [m for m in (glfw.get_monitors() or []) if m]
         zoom = {}                      # vista -> distancia de camara (la rueda la cambia)
+        look = {}                      # vista -> (yaw, tilt) de la orbita (el arrastre la mueve)
+        press = {}                     # id(ventana) -> punto donde empezo el arrastre
         slots: list = []
 
-        def view_under(win):
-            """Vista bajo el cursor: en split hay varias vistas en la misma ventana."""
-            mine = [s for s in slots if s[1] is win]
+        def winkey(win):
+            """Clave comparable y hashable para una ventana GLFW.
+
+            Las ventanas son `c_void_p`: dos instancias distintas pueden ser la misma ventana (cada
+            callback recibe su propia instancia, no la que devolvio `create_window`), y ademas no son
+            hashables para usarlas como clave de dict. Por eso el hit-test compara el `value` y `press`
+            se indexa por esa clave.
+            """
+            return getattr(win, "value", None) or id(win)
+
+        def same_win(a, b):
+            return winkey(a) == winkey(b)
+
+        def slot_under(win):
+            """Slot bajo el cursor: en split hay varias vistas en la misma ventana."""
+            mine = [s for s in slots if same_win(s[1], win)]
             if len(mine) == 1:
-                return mine[0][0]
+                return mine[0]
             try:
                 px, py = glfw.get_cursor_pos(win)
                 wpts, hpts = glfw.get_window_size(win)
                 if not wpts or not hpts:
-                    return mine[0][0]
+                    return mine[0]
                 nx, ny = px / float(wpts), 1.0 - py / float(hpts)   # rects: origen abajo-izq
-                for v, _w, r, _c, _p, _a, _va in mine:
+                for s in mine:
+                    r = s[2]
                     if r[0] <= nx < r[0] + r[2] and r[1] <= ny < r[1] + r[3]:
-                        return v
+                        return s
             except Exception:  # noqa: BLE001 - sin cursor: la primera vista de la ventana
                 pass
-            return mine[0][0] if mine else None
+            return mine[0] if mine else None
 
-        def on_scroll(win, _dx, dy):
-            """Rueda: acerca/aleja la camara de la vista apuntada (chase <-> 1a persona)."""
-            v = view_under(win)
-            if v is None or v not in ZOOMABLE:
+        def view_under(win):
+            s = slot_under(win)
+            return s[0] if s else None
+
+        def add_look(win, dyaw, dtilt):
+            """Suma el gesto a la orbita de la vista apuntada, con topete sobre el valor nuevo.
+
+            El topete se aplica despues de sumar, no sobre el valor actual: si el tilt ya estaba en
+            el topete, comprobar antes de sumar permitia seguir empujando y el valor se salia (la
+            camara se quedaba pegada arriba, sin poder volver).
+            """
+            s = slot_under(win)
+            if s is None or s[0] not in LOOKABLE:
                 return
+            v = s[0]
+            y, t = look.get(v, [0.0, 0.0])
+            y = min(LOOK_MAX_YAW, max(-LOOK_MAX_YAW, y + dyaw))
+            t = min(LOOK_MAX_TILT, max(-LOOK_MAX_TILT, t + dtilt))
+            if [y, t] != look.get(v):
+                look[v] = [y, t]
+
+        def on_move(win, x, y):
+            """Arrastre con boton: orbita la vista apuntada (horizontal = yaw, vertical = tilt).
+
+            El click que enfoca la ventana no debe mover la camara: `on_button` solo ancla el punto
+            y el gesto empieza en el movimiento siguiente. En MacOS el primer click sobre la ventana
+            suele ser el que la enfoca (GLFW no entrega eventos de boton a una ventana sin foco), asi
+            que hay que clicar una vez y despues arrastrar. Con el touchpad el arrastre de un dedo
+            tambien llega por aqui: el trackpad actua como raton con boton.
+            """
+            p = press.get(winkey(win))
+            if p is None:
+                return
+            add_look(win, STEP_LOOK * (x - p[0]), STEP_LOOK * (p[1] - y))
+            press[winkey(win)] = (x, y)
+
+        def on_button(win, button, action, _mods):
+            """Clic: mantener el boton = arrastre; boton derecho centra la orbita."""
+            if action == PRESS:
+                s = slot_under(win)
+                if button == glfw.MOUSE_BUTTON_RIGHT and s is not None:
+                    look[s[0]] = [0.0, 0.0]
+                    return
+                try:
+                    press[id(win)] = glfw.get_cursor_pos(win)      # las ventanas no son hashables
+                except Exception:  # noqa: BLE001 - ventana cerrada durante el click
+                    pass
+            elif action == RELEASE:
+                press.pop(id(win), None)
+
+        def on_scroll(win, dx, dy):
+            """Rueda/touchpad: `dy` es zoom, `dx` es la orbita horizontal.
+
+            El touchpad de MacOS no expone gestos de pinza ni de rotacion a GLFW: lo unico que llega
+            son estos eventos de scroll, asi que dos dedos en horizontal = yaw y en vertical = zoom.
+            Por eso el zoom por pinza no se puede hacer sin un layer privado de MacOS.
+            """
+            s = slot_under(win)
+            if s is None or s[0] not in ZOOMABLE:
+                return
+            v = s[0]
             z = min(ZOOM_MAX, max(ZOOM_MIN, zoom.get(v, CHASE_DIST) + STEP_ZOOM * float(dy)))
             if z != zoom.get(v, CHASE_DIST):
                 zoom[v] = z
                 _emit({"zoom": {v: round(z, 3)}})
+            if dx:
+                add_look(win, STEP_LOOK_SCROLL * float(dx), 0.0)
+
+        def bind(win):
+            """Los tres callbacks de la ventana: zoom, orbita y centrar."""
+            glfw.set_scroll_callback(win, on_scroll)
+            glfw.set_cursor_pos_callback(win, on_move)
+            glfw.set_mouse_button_callback(win, on_button)
 
         def open_windows(views):
             """(view, window, rect, ctx, prog, anim, vaos): una ventana por monitor o split."""
@@ -1061,7 +1192,7 @@ def child_main() -> None:
                     except Exception:  # noqa: BLE001 - centrar es decorativo
                         pass
                     glfw.make_context_current(win)
-                    glfw.set_scroll_callback(win, on_scroll)      # rueda: zoom de la vista
+                    bind(win)                                          # zoom, orbita y centrar
                     # con dos ventanas el vsync se pagaria dos veces por frame: aqui no esperamos
                     glfw.swap_interval(0)
                     # contexto por ventana: los objetos (program/VAO) pertenecen a SU contexto
@@ -1083,7 +1214,7 @@ def child_main() -> None:
                     except Exception:  # noqa: BLE001 - centrar es decorativo
                         pass
                 glfw.make_context_current(win)
-                glfw.set_scroll_callback(win, on_scroll)          # rueda: zoom de la vista apuntada
+                bind(win)                                            # zoom, orbita y centrar
                 glfw.swap_interval(1)
                 ctx = moderngl.create_context()
                 prog = ctx.program(vertex_shader=VS, fragment_shader=FS)
@@ -1110,6 +1241,12 @@ def child_main() -> None:
                 for v, z in (snap.get("zoom") or {}).items():   # zoom fijado desde fuera
                     if v in ZOOMABLE and isinstance(z, (int, float)) and zoom.get(v) != float(z):
                         zoom[v] = min(ZOOM_MAX, max(ZOOM_MIN, float(z)))
+                for v, val in (snap.get("look") or {}).items():   # orbita fijada desde fuera
+                    if v in LOOKABLE and isinstance(val, (list, tuple)) and len(val) == 2:
+                        y = min(LOOK_MAX_YAW, max(-LOOK_MAX_YAW, float(val[0])))
+                        t = min(LOOK_MAX_TILT, max(-LOOK_MAX_TILT, float(val[1])))
+                        if look.get(v) != [y, t]:
+                            look[v] = [y, t]
             views = [v for v in (snap.get("views") or [snap.get("view", "gauge")]) if v in SCENES]
             if not views:
                 break
@@ -1143,6 +1280,7 @@ def child_main() -> None:
                 ctx.clear(*FLOOR, 1.0)
                 anim["t"] = t0 - clock
                 anim["dist"] = zoom.get(view, CHASE_DIST)
+                anim["yaw_t"], anim["tilt_t"] = look.get(view, [0.0, 0.0])
                 layers, cam = SCENES[view](snap, anim, max(0.25, vw / vh))
                 for name, mesh in layers:
                     if mesh is None:
@@ -1170,7 +1308,8 @@ def child_main() -> None:
                 now = time.time()
                 _emit({"fps": round(frames / max(1e-6, now - report_t), 1),
                        "ms": round(1000 * work / max(1, frames), 1),
-                       "dist": {v: round(z, 3) for v, z in zoom.items()}})
+                       "dist": {v: round(z, 3) for v, z in zoom.items()},
+                       "look": {v: [round(y, 3), round(t, 3)] for v, (y, t) in look.items()}})
                 frames, report_t, work = 0, now, 0.0
             work += time.time() - t0
             time.sleep(max(0.0, 0.02 - (time.time() - t0)))
