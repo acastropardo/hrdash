@@ -216,6 +216,42 @@ class Mesh:
         """Anexa otra malla (ya transformada): un solo VBO para todo el cluster."""
         self.v.extend(other.v)
 
+    def segment(self, a, b, r, col, light=0.0) -> None:
+        """Prisma de 4 caras entre dos puntos: un miembro (muslo, espinilla, brazo)
+        o un tubo del cuadro. La seccion es un rombo, suficiente a esta escala."""
+        d = [b[i] - a[i] for i in range(3)]
+        ln = math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) or 1.0
+        d = [d[0] / ln, d[1] / ln, d[2] / ln]
+        ref = (0.0, 0.0, 1.0) if abs(d[2]) < 0.9 else (0.0, 1.0, 0.0)
+        u = [d[1] * ref[2] - d[2] * ref[1], d[2] * ref[0] - d[0] * ref[2], d[0] * ref[1] - d[1] * ref[0]]
+        ul = math.sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]) or 1.0
+        u = [u[0] / ul, u[1] / ul, u[2] / ul]
+        v = [d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2], d[0] * u[1] - d[1] * u[0]]
+        ring = [u, v, [-x for x in u], [-x for x in v]]
+        for i in range(4):
+            s1, s2 = ring[i], ring[(i + 1) % 4]
+            a1 = tuple(a[j] + r * s1[j] for j in range(3))
+            a2 = tuple(a[j] + r * s2[j] for j in range(3))
+            b1 = tuple(b[j] + r * s1[j] for j in range(3))
+            b2 = tuple(b[j] + r * s2[j] for j in range(3))
+            n = [(s1[j] + s2[j]) / 2.0 for j in range(3)]
+            self.quad(a1, b1, b2, a2, col, n, light)
+
+    def wheel(self, c, r, fwd, up, lat, col, thick=0.02, segs=16, light=0.0) -> None:
+        """Neumatico como banda cilindrica en el plano (avance, arriba): se lee desde
+        la camara chase (de canto no vale una banda plana) y desde primera persona."""
+        for i in range(segs):
+            a0, a1 = 2 * math.pi * i / segs, 2 * math.pi * (i + 1) / segs
+            def pt(a, o):
+                return (c[0] + (fwd[0] * math.cos(a) + up[0] * math.sin(a)) * r + lat[0] * o,
+                        c[1] + (fwd[1] * math.cos(a) + up[1] * math.sin(a)) * r + lat[1] * o,
+                        c[2] + (fwd[2] * math.cos(a) + up[2] * math.sin(a)) * r + lat[2] * o)
+            n = (fwd[0] * math.cos(a0) + up[0] * math.sin(a0),
+                 fwd[1] * math.cos(a0) + up[1] * math.sin(a0),
+                 fwd[2] * math.cos(a0) + up[2] * math.sin(a0))
+            self.quad(pt(a0, -thick / 2.0), pt(a0, thick / 2.0),
+                      pt(a1, thick / 2.0), pt(a1, -thick / 2.0), col, n, light)
+
     @property
     def tris(self) -> int:
         return len(self.v) // 30
@@ -321,6 +357,73 @@ def oval(cx, cy, steps=30):
     return pts
 
 
+SKIN = (0.62, 0.49, 0.41)
+FRAME = (0.15, 0.16, 0.19)
+RIM = (0.24, 0.26, 0.30)
+TIRE = (0.12, 0.13, 0.15)
+SHOE = (0.11, 0.12, 0.14)
+HELMET = (0.86, 0.89, 0.93)
+BANK = math.radians(26.0)             # peralte del trazado (lo mismo que usa ribbon)
+# Proporciones del atleta a la escala del tablero (~0,33 del real sobre rueda de 0,15)
+WR, BB_H, HIP_H, SHO_H, HEAD_H = 0.15, 0.09, 0.27, 0.36, 0.42
+CRANK, THIGH, SHIN = 0.06, 0.14, 0.14
+
+
+def _knee(H, F, L1, L2):
+    """Rodilla por IK de dos tramos en el plano sagital (s, h): (rodilla, pie)."""
+    ds, dh = F[0] - H[0], F[1] - H[1]
+    D = math.hypot(ds, dh) or 1e-6
+    D = min(D, L1 + L2 - 1e-4)
+    ca = max(-1.0, min(1.0, (L1 * L1 + D * D - L2 * L2) / (2 * L1 * D)))
+    sa = math.sqrt(max(0.0, 1.0 - ca * ca))
+    us, uh = ds / D, dh / D
+    return (H[0] + L1 * (ca * us - sa * uh), H[1] + L1 * (sa * us + ca * uh))
+
+
+def _rider(m, base, fwd, up, lat, theta, kit, pov=False) -> None:
+    """Bici + atleta: cuadro, aros, pedalada (dos piernas), torso, brazos y casco.
+
+    El marco local es (avance, altura, lateral) apoyado en la superficie peraltada.
+    En primera persona (`pov`) solo se dibuja la bici, el pedal y las manos: el cuerpo
+    quedaria entre la camara (en el casco) y el cuadro.
+    """
+    def P(s, h, w=0.0):
+        return (base[0] + fwd[0] * s + up[0] * h + lat[0] * w,
+                base[1] + fwd[1] * s + up[1] * h + lat[1] * w,
+                base[2] + fwd[2] * s + up[2] * h + lat[2] * w)
+
+    bb, hip, sho, hd, bar = (0.0, BB_H), (-0.10, HIP_H), (0.0, SHO_H), (0.18, HEAD_H), (0.27, 0.32)
+    rear, front, htube = (-0.17, WR), (0.18, WR), (0.24, 0.30)
+
+    for a, b, r in ((bb, (-0.10, HIP_H + 0.02), 0.014), (bb, htube, 0.014),
+                    ((-0.10, HIP_H + 0.02), htube, 0.012), (htube, front, 0.012),
+                    (bb, rear, 0.012), ((-0.10, HIP_H + 0.02), rear, 0.011),
+                    (htube, bar, 0.012)):
+        m.segment(P(a[0], a[1]), P(b[0], b[1]), r, FRAME, 0.15)
+    for c in (rear, front):
+        m.wheel(P(c[0], c[1]), WR, fwd, up, lat, TIRE, 0.022, 16, 0.12)
+        p = P(c[0], c[1])
+        m.box(p[0], p[1], p[2], 0.03, 0.03, 0.03, RIM, 0.0, 0.2)
+
+    for side in (1.0, -1.0):
+        ph = theta if side > 0 else theta + math.pi
+        foot = (CRANK * math.cos(ph), BB_H + CRANK * math.sin(ph))
+        m.segment(P(0.0, BB_H, 0.05 * side), P(foot[0], foot[1], 0.05 * side), 0.012, RIM, 0.2)
+        kn = _knee(hip, foot, THIGH, SHIN)
+        if not pov:
+            m.segment(P(hip[0], hip[1], 0.035 * side), P(kn[0], kn[1], 0.045 * side), 0.030, SKIN, 0.2)
+            m.segment(P(kn[0], kn[1], 0.045 * side), P(foot[0], foot[1], 0.05 * side), 0.024, SKIN, 0.2)
+            m.segment(P(sho[0], sho[1], 0.05 * side), P(bar[0], bar[1], 0.04 * side), 0.022, SKIN, 0.2)
+        p = P(foot[0], foot[1], 0.05 * side)
+        m.box(p[0], p[1], p[2], 0.06, 0.03, 0.02, SHOE, 0.0, 0.15)
+        h = P(bar[0], bar[1], 0.04 * side)
+        m.box(h[0], h[1], h[2], 0.035, 0.03, 0.025, SKIN, 0.0, 0.25)
+    if not pov:
+        m.segment(P(hip[0], hip[1]), P(sho[0], sho[1]), 0.050, kit, 0.35)      # torso
+        p = P(hd[0], hd[1])
+        m.box(p[0], p[1], p[2], 0.07, 0.07, 0.06, HELMET, 0.0, 0.3)
+
+
 def scene_pista(snap, anim, aspect=1.6):
     """Velodromo con peralte, meta cuadriculada, estela y marcador de la bici.
 
@@ -331,9 +434,9 @@ def scene_pista(snap, anim, aspect=1.6):
     cx, cy = 2.15, 1.30
     pts = oval(cx, cy, 26)
     m.box(0, 0, -0.14, 2 * (cx + cy) + 1.6, 2 * (cy + 1.2) + 1.6, 0.10, FLOOR)
-    m.ribbon(pts, 0.46, math.radians(26.0), ASPHALT)
-    m.ribbon(pts, 0.06, math.radians(26.0), EDGE, off=0.42)
-    m.ribbon(pts, 0.05, math.radians(26.0), (0.30, 0.33, 0.38), off=-0.42)
+    m.ribbon(pts, 0.46, BANK, ASPHALT)
+    m.ribbon(pts, 0.06, BANK, EDGE, off=0.42)
+    m.ribbon(pts, 0.05, BANK, (0.30, 0.33, 0.38), off=-0.42)
     for i in range(6):                                        # meta en la recta de arriba
         m.box(0.0, -cy + (i - 2.5) * 0.16, 0.06, 0.9, 0.15, 0.05,
               META if i % 2 == 0 else (0.05, 0.06, 0.08))
@@ -347,28 +450,36 @@ def scene_pista(snap, anim, aspect=1.6):
         anim["frac"] = frac
     col = _hex(snap.get("zone_color") or "#22d3ee")
     n = len(pts) - 1
-    for k in range(9, 0, -1):
-        f = (anim["frac"] - k * 0.007) % 1.0
+    for q in range(9, 0, -1):
+        f = (anim["frac"] - q * 0.007) % 1.0
         x, y = _at(pts, f)
         # streak fino sobre el asfalto (no columna: desde la camara tapa el cuadro)
-        m.box(x, y, 0.025, 0.14, 0.14, 0.03, tuple(c * (1.0 - k / 14.0) for c in col))
+        m.box(x, y, 0.025, 0.14, 0.14, 0.03, tuple(c * (1.0 - q / 14.0) for c in col))
     idx = min(n, max(0, int(anim["frac"] * n)))
     bx, by, btx, bty = pts[idx]
     bl = math.hypot(btx, bty) or 1.0
     fx, fy = btx / bl, bty / bl
-    yaw = math.atan2(bty, btx)
+    cad = float(snap.get("cadence") or 0.0)
+    anim["crank"] = anim.get("crank", 0.0) + (cad / 60.0) * 2 * math.pi * anim["dt"]
+    cb, sb = math.cos(BANK), math.sin(BANK)
+    nx, ny = -fy, fx                                   # normal horizontal (exterior)
+    up = (nx * cb, ny * cb, sb)                        # normal de la superficie peraltada
+    lat = (-up[2] * fy, up[2] * fx, up[1] * fy - up[0] * fx)
+    ll = math.sqrt(lat[0] * lat[1] + lat[2] * lat[2]) or 1.0
+    lat = (lat[0] / ll, lat[1] / ll, lat[2] / ll)
     dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
-    if dist > 0.45:                # en primera persona el bulto taparia el cuadro
-        # la bici: bicho + bulto del ciclista, para que se lea como un rider
-        m.box(bx, by, 0.14, 0.50, 0.22, 0.20, col, yaw=yaw, light=0.4)
-        m.box(bx + fx * 0.10, by + fy * 0.10, 0.34, 0.20, 0.16, 0.22, (0.85, 0.88, 0.92),
-              yaw=yaw, light=0.3)
+    pov = dist < 0.5
+    fwd = (fx, fy, 0.0)
+    base = (bx, by, sb * 0.46)                         # apoyo sobre el asfalto peraltado
+    _rider(m, base, fwd, up, lat, anim["crank"], col, pov=pov)
     # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici;
-    # al cerrar el zoom baja a la altura de la cabeza (primera persona)
-    ez = 0.55 if dist >= 0.8 else 0.68
-    cz = 0.22 if dist >= 0.8 else 0.34
-    eye = (bx - fx * dist, by - fy * dist, ez)
-    center = (bx + fx * max(1.6, dist * 1.2), by + fy * max(1.6, dist * 1.2), cz)
+    # al cerrar el zoom sube al casco (primera persona). Alturas medidas en `up`.
+    k = min(1.0, max(0.0, (dist - 0.2) / 0.8))
+    eh, ch = 0.42 - 0.07 * k, 0.14 - 0.12 * k
+    s0 = -dist + 0.18 * max(0.0, (0.5 - dist) / 0.3)      # en POV se acerca al casco
+    ahead = max(1.4, dist * 1.2)
+    eye = tuple(base[j] + fwd[j] * s0 + up[j] * eh for j in range(3))
+    center = tuple(base[j] + fwd[j] * (s0 + ahead) + up[j] * ch for j in range(3))
     return [("frame", m)], (eye, center, (0.0, 0.0, 1.0), 0.62)
 
 
@@ -462,7 +573,7 @@ def _split_rect(view, i, n):
 
 def _new_anim():
     return {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0,
-            "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0}
+            "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0, "crank": 0.0}
 
 
 def _uniq(items):
