@@ -31,7 +31,7 @@ trabajo: se actualiza con cada fase y se commita junto con el codigo que la impl
    salida/meta, kerbs, asfalto) — **hecha** a escala real (1 unidad = 1 m): 86,9 m de recta
    + 113,1 m de curva, 8 calles, peralte solo en curvas con rampa de entrada/salida.
 2. Camara chase + zoom con la rueda (chase <-> primera persona como maximo) — **hecha**
-   (rango 0,20..6,0 m, notch 0,18 m, aplicado a la vista bajo el cursor). Falta confirmar con
+   (rango 0,20..6,0 m, notch 0,18 m, aplicado a la vista bajo el cursor; `+` y `-` mandan el mismo paso desde la TUI). Falta confirmar con
    la rueda fisica: un evento de scroll no se puede sintetizar headless.
 3. Rider = atleta simulado; fase futura: renders Blender — **hecha** en version procedural
    (cuadro, dos ruedas, pedalada con la cadencia, torso, brazos, casco). Pendiente el modelo
@@ -100,6 +100,9 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   distintas para un `c_void_p` (el `value` del puntero no es su `id`), asi que el gesto solo
   funcionaba cuando coincidian. Ahora todo el camino del arrastre usa `winkey()`. Ademas, sin el
   `RELEASE` el ancla sobrevivia y cualquier movimiento suelto del cursor seguia orbitando.
+- El paso de zoom trataba `delta 0` como `-1` (`1 if int(cmd[1]) > 0 else -1`), y el estado inicial
+  de la TUI es nonce 0 con delta 0: la primera linea JSON ya movia la camara. Ahora se ignora
+  delta 0 y el nonce solo se registra cuando hay paso que aplicar.
 
 ## Estado de la implementacion
 
@@ -194,7 +197,13 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   Renders con look aplicado: `v15_look.png` (yaw 1,2 / tilt 0,3, el rider sigue en el cuadro),
   `v15_low.png` (tilt -0,45, el guard mantiene el ojo sobre el tablon) y `v15_pov.png` (giro de
   cabeza). El render neutro con look [0,0] es byte-identico a `v14_curve.png` -> no hay regresion
-  de encuadre. Hint de la TUI: `r: race (rueda: zoom, arrastre: orbita)`.
+  de encuadre. Hint de la TUI: `r: race (rueda: zoom, arrastre: orbita) · + -: zoom`.
+- Zoom con `+` y `-` (`action_zoom_view` en la TUI, `add_zoom` en el hijo): la camara es estado del
+  proceso hijo, asi que la TUI no fija el valor, manda un paso `[nonce, delta]` en el snapshot y
+  el hijo lo aplica una sola vez por nonce. `add_zoom` y `add_look` reciben el slot apuntado, y el
+  paso se aplica a la vista zoomable, igual que la rueda. Con el primer snapshot `slots` aun esta
+  vacio, por eso el paso se aplica despues de abrir las ventanas. Sin ventana 3D la tecla no hace
+  nada, y con modal abierto no se simula (coincide con la regla de `p`).
 - Teclas desde la ventana (`on_key` + `App.simulate_key`): el hijo no tiene acciones propias, solo
   traduce el codigo de GLFW al nombre que la TUI usa (`KEYNAMES`) y reenvia **solo PRESS** (con
   REPEAT la TUI recibiria una accion por cada repeticion del teclado). La TUI lo ejecuta con
@@ -250,6 +259,11 @@ post-proceso + assets importados, y entonces como proceso aparte con el mismo pr
   al crear la ventana. `ui_key_check.py` cubre el lado TUI con `run_test()` (sin TTY): tecla reenviada
   ejecutada, ignorada con modal, aviso de sin foco y lector que falla sin tumbar el muestreo. El bloque
   7 de `look_check.py` comprueba el ancla: tras el `RELEASE` un movimiento suelto del cursor no orbita.
+  Los bloques 5-8 de `key_check.py` comprueba el paso de zoom: `+` reenvia, el mismo nonce no se
+  aplica dos veces, `-` mueve con nonce nuevo y delta 0 (el estado inicial) no mueve nada. En
+  `ui_key_check.py` la accion manda `[1, 1]` y `[2, -1]`, llega en el snapshot, y sin ventana 3D
+  no hace nada. Comprobado ademas con el proceso real: `zoom_cmd` `[1,1]` -> 2,58, el duplicado no
+  repite, `[2,-1]` -> 2,40, `[3,1]` -> 2,58, `[4,0]` no mueve nada.
 - Proceso real: una linea JSON por stdin, mensajes `win`/`err`/`fps` por stdout; se comprueba
   que el layout cambia on the fly, que sale con exit 0 y que no quedan procesos huerfanos.
 - TUI: `3` y `r` (toggles independientes), `p` intacto, `x` reset, `c` abre el modal sin crash.

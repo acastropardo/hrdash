@@ -1071,13 +1071,15 @@ def child_main() -> None:
         look = {}                      # vista -> (yaw, tilt) de la orbita (el arrastre la mueve)
         press = {}                     # winkey(ventana) -> punto donde empezo el arrastre
         focus = {}                     # winkey(ventana) -> enfocada (sin foco no llegan teclas)
+        nudge = None                   # nonce del ultimo paso de zoom que aplico el hijo
         # Teclas reenviadas a la TUI: la TUI es la dueña de los bindings, aqui solo se traduce el
         # codigo de GLFW al nombre que la TUI usa, para no duplicar la tabla de acciones.
         KEYNAMES = {glfw.KEY_Q: "q", glfw.KEY_X: "x", glfw.KEY_S: "s", glfw.KEY_C: "c",
                     glfw.KEY_H: "h", glfw.KEY_W: "w", glfw.KEY_G: "g", glfw.KEY_P: "p",
                     glfw.KEY_3: "3", glfw.KEY_R: "r",
                     glfw.KEY_LEFT: "left", glfw.KEY_RIGHT: "right",
-                    glfw.KEY_LEFT_BRACKET: "[", glfw.KEY_RIGHT_BRACKET: "]"}
+                    glfw.KEY_LEFT_BRACKET: "[", glfw.KEY_RIGHT_BRACKET: "]",
+                    glfw.KEY_MINUS: "-", glfw.KEY_EQUAL: "+"}     # `+` es KEY_EQUAL (sin shift)
         slots: list = []
 
         def winkey(win):
@@ -1116,14 +1118,28 @@ def child_main() -> None:
             s = slot_under(win)
             return s[0] if s else None
 
-        def add_look(win, dyaw, dtilt):
+        def add_zoom(s, dstep):
+            """Paso de zoom sobre la vista, con topete sobre el valor nuevo.
+
+            Lo usan la rueda y el `+`/`-` que manda la TUI: la camara es estado del hijo, asi que la
+            TUI no fija el zoom, manda un paso. El topete se aplica sobre el valor nuevo, no sobre el
+            actual, para poder seguir empujando desde el limite y volver.
+            """
+            if s is None or s[0] not in ZOOMABLE:
+                return
+            v = s[0]
+            z = min(ZOOM_MAX, max(ZOOM_MIN, zoom.get(v, CHASE_DIST) + dstep))
+            if z != zoom.get(v, CHASE_DIST):
+                zoom[v] = z
+                _emit({"zoom": {v: round(z, 3)}})
+
+        def add_look(s, dyaw, dtilt):
             """Suma el gesto a la orbita de la vista apuntada, con topete sobre el valor nuevo.
 
             El topete se aplica despues de sumar, no sobre el valor actual: si el tilt ya estaba en
             el topete, comprobar antes de sumar permitia seguir empujando y el valor se salia (la
             camara se quedaba pegada arriba, sin poder volver).
             """
-            s = slot_under(win)
             if s is None or s[0] not in LOOKABLE:
                 return
             v = s[0]
@@ -1145,7 +1161,7 @@ def child_main() -> None:
             p = press.get(winkey(win))
             if p is None:
                 return
-            add_look(win, STEP_LOOK * (x - p[0]), STEP_LOOK * (p[1] - y))
+            add_look(slot_under(win), STEP_LOOK * (x - p[0]), STEP_LOOK * (p[1] - y))
             press[winkey(win)] = (x, y)
 
         def on_button(win, button, action, _mods):
@@ -1189,13 +1205,9 @@ def child_main() -> None:
             s = slot_under(win)
             if s is None or s[0] not in ZOOMABLE:
                 return
-            v = s[0]
-            z = min(ZOOM_MAX, max(ZOOM_MIN, zoom.get(v, CHASE_DIST) + STEP_ZOOM * float(dy)))
-            if z != zoom.get(v, CHASE_DIST):
-                zoom[v] = z
-                _emit({"zoom": {v: round(z, 3)}})
+            add_zoom(s, STEP_ZOOM * float(dy))
             if dx:
-                add_look(win, STEP_LOOK_SCROLL * float(dx), 0.0)
+                add_look(s, STEP_LOOK_SCROLL * float(dx), 0.0)
 
         def bind(win):
             """Los callbacks de la ventana: zoom, orbita, centrar, teclas y foco."""
@@ -1298,6 +1310,18 @@ def child_main() -> None:
                     except Exception:  # noqa: BLE001
                         pass
                 slots = list(open_windows(views))
+            cmd = snap.get("zoom_cmd")                   # `+`/`-`: la TUI manda el paso, no el valor
+            if isinstance(cmd, (list, tuple)) and len(cmd) == 2 and cmd[0] != nudge:
+                try:
+                    d = int(cmd[1])
+                except (TypeError, ValueError):  # noqa: BLE001 - linea malformada
+                    d = 0
+                if d:                                    # delta 0 es el estado inicial: no mueve nada
+                    nudge = cmd[0]                       # el mismo nonce no se aplica dos veces
+                    # Se aplica aqui, no con el resto del snapshot: `slots` acaba de abrirse y la
+                    # primera linea JSON llega antes de crear la ventana, asi que no hay vista.
+                    add_zoom(next((s for s in slots if s[0] in ZOOMABLE), None),
+                             STEP_ZOOM * (1 if d > 0 else -1))
             if any(glfw.window_should_close(s[1]) for s in slots):
                 err = "ventana cerrada"
                 break
