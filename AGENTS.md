@@ -95,3 +95,6 @@ The parsers are hand-rolled binary decoders that must stay tolerant of out-of-sp
 - Broad `except Exception  # noqa: BLE001` blocks are deliberate robustness (the app must never
   die on a malformed payload or a bad frame); do not "clean them up".
 - Commit messages are one-line Spanish describing the observable behaviour, not the file changed.
+- Work plans are version-controlled in `docs/plans/` (one file per feature/phase) — the repo copy is
+  the canonical one; update it with each phase and commit it with the code that implements it.
+  Validation harnesses stay outside the repo (scratch dir), and the plan lists what they check.
