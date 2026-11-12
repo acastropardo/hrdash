@@ -87,23 +87,48 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
     enc.write_mesg({'mesg_num': 21, 'timestamp': utc_start, 'event': 'session', 'event_type': 'start'})
     enc.write_mesg({'mesg_num': 21, 'timestamp': utc_end, 'event': 'session', 'event_type': 'stop'})
 
-    enc.write_mesg({
-        'mesg_num': MESG_LAP,
-        'message_index': 0,
-        'timestamp': utc_end,
-        'sport': 'training',
-        'event': 'lap',
-        'event_type': 0,
-        'start_time': utc_start,
-        'total_elapsed_time': float(dur),
-        'total_timer_time': float(dur),
-        'total_calories': kcal,
-        'avg_heart_rate': int(round(session.avg_hr)),
-        'max_heart_rate': int(session.max_hr),
-        'min_heart_rate': int(session.min_hr),
-        'time_in_hr_zone': time_in_zone,
-        **_trainer_fields(session, tr_data),
-    })
+    blocks = session.blocks()
+    if blocks:
+        # Un lap por bloque del plan: los limites son la primera muestra de cada tramo (el primero
+        # arranca con la sesion) y la ultima muestra cierra el ultimo.
+        bounds = [start] + [b["start"] for b in blocks[1:]] + [max(end, blocks[-1]["end"])]
+        for i, b in enumerate(blocks):
+            t0, t1 = bounds[i], max(bounds[i] + 1, bounds[i + 1])
+            enc.write_mesg({
+                'mesg_num': MESG_LAP,
+                'message_index': i,
+                'timestamp': datetime.fromtimestamp(t1, tz=timezone.utc),
+                'sport': 'training',
+                'event': 'lap',
+                'event_type': 0,
+                'start_time': datetime.fromtimestamp(t0, tz=timezone.utc),
+                'total_elapsed_time': float(t1 - t0),
+                'total_timer_time': float(min(t1 - t0, max(1, b["n"]))),   # sin pausas
+                'total_calories': int(round(b["kcal"])),
+                'avg_heart_rate': int(round(b["avg_hr"])),
+                'max_heart_rate': int(b["max_hr"]),
+                'min_heart_rate': int(b["min_hr"]),
+                'time_in_hr_zone': [float(z) for z in b["zones"]],
+                **_block_fields(b, tr_data),
+            })
+    else:
+        enc.write_mesg({
+            'mesg_num': MESG_LAP,
+            'message_index': 0,
+            'timestamp': utc_end,
+            'sport': 'training',
+            'event': 'lap',
+            'event_type': 0,
+            'start_time': utc_start,
+            'total_elapsed_time': float(dur),
+            'total_timer_time': float(dur),
+            'total_calories': kcal,
+            'avg_heart_rate': int(round(session.avg_hr)),
+            'max_heart_rate': int(session.max_hr),
+            'min_heart_rate': int(session.min_hr),
+            'time_in_hr_zone': time_in_zone,
+            **_trainer_fields(session, tr_data),
+        })
 
     enc.write_mesg({
         'mesg_num': MESG_SESSION,
@@ -112,8 +137,8 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
         'sport': 'training',
         'start_time': utc_start,
         'total_elapsed_time': float(dur),
-        'total_timer_time': float(dur),
-        'num_laps': 1,
+        'total_timer_time': float(max(1, dur - int(session.paused_s))),    # sin pausas
+        'num_laps': max(1, len(blocks)),
         'first_lap_index': 0,
         'total_calories': kcal,
         'avg_heart_rate': int(round(session.avg_hr)),
@@ -125,7 +150,7 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
 
     enc.write_mesg({
         'mesg_num': MESG_ACTIVITY,
-        'total_timer_time': float(dur),
+        'total_timer_time': float(max(1, dur - int(session.paused_s))),
         'num_sessions': 1,
         'type': 'manual',
         'event': 'activity',
@@ -136,6 +161,22 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
     data = enc.close()
     path.write_bytes(data)
     return path
+
+
+def _block_fields(b: dict, tr_data: bool) -> dict:
+    """Potencia/velocidad/cadencia/distancia de un lap por bloque (mismos campos que el de sesion)."""
+    if not tr_data:
+        return {}
+    f = {}
+    if b["avg_w"]:
+        f['avg_power'] = int(round(b["avg_w"]))
+        f['max_power'] = int(b["max_w"])
+    if b["avg_kmh"]:
+        f['avg_speed'] = round(b["avg_kmh"] / 3.6, 3)
+        f['total_distance'] = float(b["dist_m"])
+    if b["avg_cad"]:
+        f['avg_cadence'] = int(round(b["avg_cad"]))
+    return f
 
 
 def _trainer_fields(session: Session, tr_data: bool) -> dict:
@@ -175,10 +216,13 @@ def validate_fit(path: Path, session: Session) -> dict:
         'app_max_hr': session.max_hr,
         'fit_max_watts': max(pows) if pows else None,
         'app_max_watts': session.max_watts or None,
+        'laps': len(messages.get('lap_mesgs', [])),
+        'expected_laps': max(1, len(session.blocks())),
         'errors': len(errors),
         'bytes': path.stat().st_size,
     }
     ok = (summary['records'] == summary['samples']
+          and summary['laps'] == summary['expected_laps']
           and summary['fit_max_hr'] == summary['app_max_hr']
           and (summary['fit_max_watts'] is None
                or summary['fit_max_watts'] == summary['app_max_watts']))

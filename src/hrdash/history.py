@@ -44,6 +44,8 @@ class Session:
                    "cadence": [0.0, 0.0, 0.0, 0],
                    "speed_kmh": [0.0, 0.0, 0.0, 0]}
         self.total_dist_m: int = 0
+        self.paused_s: float = 0.0              # segundos en pausa ya cerrados (no cuentan como sesion)
+        self._pause_t0: float | None = None     # cuando empezo la pausa en curso
 
     def add(self, hr: int, watts: int | None = None, cadence: float | None = None,
             speed_kmh: float | None = None, dist_m: int | None = None,
@@ -100,7 +102,62 @@ class Session:
 
     @property
     def elapsed_s(self) -> int:
-        return max(0, int(time.time() - self.start_ts))
+        ref = self._pause_t0 if self._pause_t0 is not None else time.time()
+        return max(0, int(ref - self.start_ts - self.paused_s))     # congelado mientras dura la pausa
+
+    @property
+    def paused(self) -> bool:
+        return self._pause_t0 is not None
+
+    def pause(self) -> None:
+        if self._pause_t0 is None:
+            self._pause_t0 = time.time()
+
+    def resume(self) -> float:
+        """Termina la pausa; devuelve los segundos que duro (0 si no estaba en pausa)."""
+        if self._pause_t0 is None:
+            return 0.0
+        dt = time.time() - self._pause_t0
+        self.paused_s += dt
+        self._pause_t0 = None
+        return dt
+
+    def blocks(self) -> list:
+        """Un resumen por tramo de plan (muestras consecutivas con el mismo `bloque`): [] si la
+        sesion no tuvo plan. Alimenta un lap del FIT por bloque y la tabla del resumen final.
+        Cada tramo: label, start/end (epoch de su primera/ultima muestra), n, kcal, FC (media,
+        max, min), segundos por zona, potencia/cadencia/velocidad medias (solo muestras validas)
+        y metros recorridos."""
+        if not any(x.bloque for x in self.samples):
+            return []
+        out: list = []
+        groups: list = []
+        for x in self.samples:
+            lab = x.bloque or "libre"
+            if groups and groups[-1][0] == lab:
+                groups[-1][1].append(x)
+            else:
+                groups.append((lab, [x]))
+        prev_dist = 0
+        for lab, xs in groups:
+            def avg(vals):
+                vals = [v for v in vals if v]
+                return (sum(vals) / len(vals)) if vals else 0.0
+            zones = [0] * 6
+            for x in xs:
+                zones[x.zone_idx] += 1
+            dists = [x.dist_m for x in xs if x.dist_m is not None]
+            end_d = max(dists) if dists else prev_dist
+            wl = [x.watts for x in xs if x.watts]
+            out.append({"label": lab, "start": xs[0].epoch, "end": xs[-1].epoch, "n": len(xs),
+                        "kcal": sum(x.kcal_per_min for x in xs) / 60.0,
+                        "avg_hr": sum(x.hr for x in xs) / len(xs), "max_hr": max(x.hr for x in xs),
+                        "min_hr": min(x.hr for x in xs), "zones": zones,
+                        "avg_w": avg(x.watts for x in xs), "max_w": max(wl) if wl else 0,
+                        "avg_cad": avg(x.cadence for x in xs), "avg_kmh": avg(x.speed_kmh for x in xs),
+                        "dist_m": max(0, end_d - prev_dist)})
+            prev_dist = max(prev_dist, end_d)
+        return out
 
     def window(self, n: int) -> list[Sample]:
         return self.samples[-n:] if n < self.n else list(self.samples)

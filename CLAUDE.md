@@ -124,6 +124,13 @@ values layers). `scene_gauge` adds the strip and zooms the camera out (`_cam(pla
 not cover the panel's top labels; the pista puts it under the digital strip. `--now` builds the plan in
 `cmd_3d`, not in `Engine.__init__`, so headless runs are unaffected.
 
+Phase 5: `Session.blocks()` (consecutive samples with the same `bloque`) feeds one FIT lap per block
+(`validate_fit` also checks the lap count), and the per-block summary table. Pause is `Session.pause()/
+resume()` (`elapsed_s` excludes it; no samples while paused; `Engine._pause_dist` keeps the trainer
+distance continuous); key `space` is forwarded to the engine only in standalone and only while running
+(in the menu it activates the focused widget). `cluster.pause_hud` sends one empty mesh on resume so the
+window drops the banner.
+
 ## Workout plans
 
 `workouts.py` is the pure model for the pre-session menu feature (plan:
@@ -139,4 +146,4 @@ the last one.
 `gauges.py` and `track.py`; both cache the background per geometry and redraw only the
 moving piece per frame. `laps.py` splits distance into `lap_m` laps for the pista view
 (distance is integrated from speed and flagged `estimada` when the trainer sends none);
-laps are display-only — the FIT still records a single lap.
+these distance laps are display-only — the FIT records a single lap, or one per plan block when a plan ran (`Session.blocks()`).
