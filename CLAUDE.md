@@ -146,4 +146,4 @@ the last one.
 `gauges.py` and `track.py`; both cache the background per geometry and redraw only the
 moving piece per frame. `laps.py` splits distance into `lap_m` laps for the pista view
 (distance is integrated from speed and flagged `estimada` when the trainer sends none);
-laps are display-only — the FIT still records a single lap.
+these distance laps are display-only — the FIT records a single lap, or one per plan block when a plan ran (`Session.blocks()`).
