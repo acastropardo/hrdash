@@ -546,3 +546,116 @@ def _clock(secs) -> str:
 
 
 CLUSTER = Cluster()
+
+# ---------------------------------------------------------------- HUD de la pista
+# Los mismos diales, en las esquinas de la vista del ciclista como en un juego de carreras:
+# velocimetro grande abajo a la derecha con el "cuentarrevoluciones" (cadencia) al lado, FC
+# grande abajo a la izquierda con la potencia, y una tira arriba con tiempo, distancia,
+# vuelta del velodromo y kcal. Coordenadas de pantalla: x en [-aspecto, aspecto], y en
+# [-1, 1]; glview las dibuja con una camara ortografica despues de la escena 3D.
+HUD_BIG, HUD_SMALL = 0.27, 0.17
+HUD_REF_ASPECT = 1.5                # por debajo de este aspecto el HUD se encoge (vistas partidas)
+HUD_LAP_M = 250.0                   # la vuelta del velodromo 3D
+
+
+def _hud_layout(aspect):
+    """(escala, {dial: (cx, cy, r, etiqueta, unidad)}) para este aspecto de ventana."""
+    a = max(0.6, aspect)
+    s = min(1.0, a / HUD_REF_ASPECT)
+    big, small = HUD_BIG * s, HUD_SMALL * s
+    return s, {
+        "hr": (-a + 0.34 * s, -1.0 + 0.34 * s, big, "FRECUENCIA", "BPM"),
+        "w": (-a + 0.86 * s, -1.0 + 0.20 * s, small, "POTENCIA", "W"),
+        "v": (a - 0.34 * s, -1.0 + 0.34 * s, big, "VELOCIDAD", "KM/H"),
+        "c": (a - 0.86 * s, -1.0 + 0.20 * s, small, "CADENCIA", "RPM"),
+    }
+
+
+HUD_STRIP = ("TIEMPO", "DIST KM", "VUELTA", "KCAL")
+
+
+def _hud_strip_x(s):
+    """Centros x de las cuatro casillas de la tira superior."""
+    return [(-1.5 + i) * 0.36 * s for i in range(len(HUD_STRIP))]
+
+
+def hud_layers(snap, anim, aspect):
+    """Capas del HUD (`hud_static`, `hud_values`, `hud_frame`) con la misma cache que el
+    cluster: lo estatico solo cambia con las escalas o el aspecto, los digitos a 1 Hz y
+    las agujas por frame (con la inercia asimetrica de la TUI y el self-test al abrir)."""
+    cfg = Cluster._scales(snap)
+    s, lay = _hud_layout(aspect)
+    key = (repr(cfg), round(aspect, 3))
+    out = []
+    if anim.get("hud_key") != key:
+        anim["hud_key"] = key
+        anim["hud_vsig"] = None
+        m = Mesh()
+        for which, (cx, cy, r, label, unit) in lay.items():
+            lo, hi, segs, major, minor = cfg[which]
+            one = Mesh()
+            one.panel(cx, cy)
+            dial_static(one, r, lo, hi, segs, major, minor, label, unit, big=which in ("hr", "v"))
+            m.merge(one)
+        bar = Mesh()
+        bar.panel(0.0, 1.0 - 0.10 * s)
+        bar.box(0.0, 0.0, 0.0, 1.50 * s, 0.17 * s, 0.01, (0.07, 0.08, 0.10), light=0.2)
+        bar.box(0.0, -0.085 * s, 0.006, 1.50 * s, 0.006 * s, 0.01, (0.30, 0.34, 0.40), light=0.4)
+        for x, lab in zip(_hud_strip_x(s), HUD_STRIP):
+            draw_text(bar, x, 0.035 * s, 0.01, 0.032 * s, lab, DIM, light=0.9, align="c")
+        m.merge(bar)
+        out.append(("hud_static", m))
+    else:
+        out.append(("hud_static", None))
+
+    vsig = (snap.get("version"), key)
+    if anim.get("hud_vsig") != vsig:
+        anim["hud_vsig"] = vsig
+        m = Mesh()
+        vals = {"hr": float(snap.get("hr") or 0), "w": float(snap.get("watts") or 0),
+                "v": float(snap.get("speed") or 0), "c": float(snap.get("cadence") or 0)}
+        alarm = bool(snap.get("alarm"))
+        for which, (cx, cy, r, _l, _u) in lay.items():
+            one = Mesh()
+            one.panel(cx, cy)
+            dial_values(one, r, _digits_for(which, vals[which]), 0.15, alarm and which == "hr")
+            m.merge(one)
+        dist_m = float(snap.get("dist_km") or 0) * 1000.0
+        cells = (_clock(snap.get("elapsed_s") or 0), "%.2f" % (dist_m / 1000.0),
+                 "%d" % (int(dist_m // HUD_LAP_M) + 1), "%d" % round(float(snap.get("total_kcal") or 0)))
+        cols = (WHITE, CYAN, AMBER, GREEN)
+        bar = Mesh()
+        bar.panel(0.0, 1.0 - 0.10 * s)
+        h = 0.060 * s
+        for x, val, col in zip(_hud_strip_x(s), cells, cols):
+            draw_digits(bar, x - digits_w(val, h) / 2.0, -0.055 * s, 0.012, h, val, col, light=0.95)
+        m.merge(bar)
+        out.append(("hud_values", m))
+    else:
+        out.append(("hud_values", None))
+
+    m = Mesh()
+    cols = {"hr": _hex(snap.get("zone_color") or "#ef4444"),
+            "w": _hex(snap.get("wzone_color") or "#facc15"),
+            "v": CYAN, "c": (0.66, 0.55, 0.98)}
+    vals = {"hr": float(snap.get("hr") or 0), "w": float(snap.get("watts") or 0),
+            "v": float(snap.get("speed") or 0), "c": float(snap.get("cadence") or 0)}
+    needles = anim.setdefault("hud_needles", {})
+    sweep = _sweep(anim)
+    alarm = bool(snap.get("alarm"))
+    for which, (cx, cy, r, _l, _u) in lay.items():
+        lo, hi, _segs, major, minor = cfg[which]
+        if sweep is None:
+            prev = needles.get(which, 0.0)
+            k = 0.5 if vals[which] > prev else 0.14
+            needles[which] = prev + (vals[which] - prev) * k
+        else:
+            needles[which] = sweep * hi
+        one = Mesh()
+        one.panel(cx, cy)
+        dial_frame(one, r, needles[which], lo, hi, major, minor,
+                   0.90 if which == "hr" else (0.86 if which == "w" else None),
+                   cols[which], alarm and which == "hr")
+        m.merge(one)
+    out.append(("hud_frame", m))
+    return out

@@ -280,3 +280,25 @@ Captura lateral: se lee como un muneco de palos, no como un ciclista.
   1/3 del ancho o 2,45 m, lineas de persecucion a mitad de recta.
 - Pendiente de confirmar en el reglamento UCI (cap. VI): cota exacta de la linea roja y
   ancho de la banda de meta.
+
+## Extra: HUD de juego de carreras sobre la pista
+
+**Estado: hecho.**
+
+- `cluster.hud_layers()` reutiliza `dial_static` / `dial_values` / `dial_frame` y las escalas
+  de `Cluster._scales`: FC grande + potencia abajo a la izquierda, velocimetro grande +
+  cadencia ("cuentarrevoluciones") abajo a la derecha, y una tira arriba con tiempo,
+  distancia, vuelta del velodromo (250 m) y kcal. Mismas capas que el cluster
+  (`hud_static` por escalas y aspecto, `hud_values` a 1 Hz, `hud_frame` por frame con la
+  inercia y el self-test). Por debajo de aspecto 1,5 (vista partida) todo se encoge.
+- `_draw()` dibuja la escena y despues el HUD con camara ortografica (`hud_cam`): borra
+  solo la profundidad con el color enmascarado. Ojo: en moderngl 5.13 `color_mask` solo
+  llega a GL con `fbo.use()`, y `use()` repone el viewport completo; sin restaurar el
+  viewport y el scissor del slot, la mascara quedaba en `False` y el HUD no se pintaba.
+- `scene_pista` devuelve la camara con un sexto campo (HUD visible); tecla `i` en la
+  ventana o en la TUI (contador `hud_cmd`, como `cam_cmd`).
+- Coste: `scene_pista` pasa de ~3,1 a ~5,9 ms/frame (las agujas se rehacen por frame).
+- Verificado: capturas offscreen (chase, TV, POV), `hrdash --simulate` real con `r`
+  (pantalla completa), `3` (vista partida: el HUD queda en su mitad) e `i` (oculto); al
+  salir `round-trip OK 64/64`; escenas hr/watts/gauge sin cambios; smoke FIT OK.
+
