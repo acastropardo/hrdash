@@ -55,6 +55,7 @@ class Engine:
         # Sin menu (`--now`, headless) arranca ya en "running", como siempre.
         self.phase = "menu" if menu else "running"
         self._dist0 = 0                     # distancia del rodillo al empezar la sesion
+        self._pause_dist = 0                # distancia del rodillo al pausar (para no contar la pausa)
         self.scanner = scanner or _default_scanner
         self.factory = factory or self._default_factory
         self.devices: list[dict] = []       # ultimo escaneo, ya recortado y ordenado
@@ -340,6 +341,19 @@ class Engine:
                      "next": None if nxt is None else {"name": nxt.block.name, "secs": nxt.block.secs}})
         return info
 
+    def toggle_pause(self) -> bool:
+        """Pausa o reanuda la sesion en curso (solo rodando). En pausa no se anota nada y el reloj de
+        la sesion y del plan se congela; la distancia que el rodillo siga contando se descarta."""
+        if self.phase != "running":
+            return False
+        if self.session.paused:
+            self.session.resume()
+            self._dist0 += self._trainer_dist() - self._pause_dist
+        else:
+            self.session.pause()
+            self._pause_dist = self._trainer_dist()
+        return True
+
     def poll(self) -> tuple:
         """Un ciclo de 1 Hz: lee atributos, añade muestra y vuelta. (sample, closed).
 
@@ -347,6 +361,8 @@ class Engine:
         """
         if self.phase == "menu":
             return (None, None)             # antes de Play se lee en vivo pero no se graba
+        if self.session.paused:
+            return (None, None)             # en pausa tampoco
         hr = getattr(self.hr, "latest_hr", None)
         if hr is None:
             return (None, None)
@@ -370,7 +386,7 @@ class Engine:
                                    views=views, zoom_cmd=zoom_cmd,
                                    standalone=True, phase=self.phase,
                                    menu=self.menu_info() if menu else None,
-                                   workout=self.plan_info())
+                                   workout=self.plan_info(), paused=self.session.paused)
 
     def handle_key(self, name: str) -> bool:
         """Tecla procesada por el motor en standalone. True si fue `q` (salir y grabar).
@@ -380,7 +396,9 @@ class Engine:
         """
         if name == "q":
             return True
-        if name == "x":
+        if name == "space":
+            self.toggle_pause()
+        elif name == "x":
             if self.phase == "menu":
                 return False                # no hay sesion que reiniciar antes de Play
             self.session.reset()
@@ -400,6 +418,7 @@ class Engine:
 
     def export(self) -> dict:
         from .export import export_session
+        self.session.resume()               # una pausa abierta al salir se cierra antes de grabar
         try:
             return export_session(self.session, self.config, self.name())
         except Exception as exc:  # noqa: BLE001 - el export no puede tumbar la salida

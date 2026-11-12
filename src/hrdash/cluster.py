@@ -577,6 +577,25 @@ def plan_hud(snap, anim, aspect, top=False):
     return [("hud_plan", m)]
 
 
+def pause_hud(snap, anim, aspect):
+    """Cartel PAUSA en el centro (capa `hud_pause`); al reanudar se manda una malla vacia una vez
+    para que la ventana suelte el cartel. [] si nunca se pauso."""
+    if not snap.get("paused"):
+        if anim.pop("pause_on", False):
+            return [("hud_pause", Mesh())]
+        return []
+    anim["pause_on"] = True
+    s = _hud_layout(aspect)[0]
+    m = Mesh()
+    m.panel(0.0, 0.0)
+    m.box(0.0, 0.0, 0.0, 1.10 * s, 0.30 * s, 0.01, (0.05, 0.06, 0.08), light=0.2)
+    m.box(0.0, 0.14 * s, 0.006, 1.10 * s, 0.012 * s, 0.012, AMBER, light=0.9)
+    m.box(0.0, -0.14 * s, 0.006, 1.10 * s, 0.012 * s, 0.012, AMBER, light=0.9)
+    draw_text(m, 0.0, 0.035 * s, 0.02, 0.095 * s, "PAUSA", AMBER, light=0.95, align="c", depth=0)
+    draw_text(m, 0.0, -0.075 * s, 0.02, 0.032 * s, "ESPACIO PARA SEGUIR", INK, light=0.9, align="c", depth=0)
+    return [("hud_pause", m)]
+
+
 class Cluster:
     """Arma el cluster en 3 capas: estatica (raro), valores (1 Hz) y agujas (por frame)."""
 
@@ -951,4 +970,4 @@ def hud_layers(snap, anim, aspect):
                    cache=anim.setdefault("tick_cache", {}))
         m.merge(one)
     out.append(("hud_frame", m))
-    return out + plan_hud(snap, anim, aspect)
+    return out + plan_hud(snap, anim, aspect) + pause_hud(snap, anim, aspect)

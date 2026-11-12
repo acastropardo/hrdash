@@ -163,6 +163,17 @@ def print_summary(sess: Session, res: dict) -> None:
               f"vel media {sess.avg_speed:.1f} km/h · dist {sess.dist_km:.2f} km · "
               f"cad media {sess.avg_cadence:.0f} rpm")
     print(f"  calorias (Keytel): {sess.total_kcal:.1f} kcal")
+    if sess.paused_s >= 1:
+        print(f"  en pausa: {int(sess.paused_s) // 60}:{int(sess.paused_s) % 60:02d} (no cuenta en la duracion)")
+    blocks = sess.blocks()
+    if blocks:                                   # sesion con plan: una linea por bloque
+        print("  bloques:")
+        for b in blocks[:40]:
+            w = f" · {b['avg_w']:.0f} W" if b["avg_w"] else ""
+            print("    %-22s %2d:%02d · FC %3.0f (max %d)%s" % (
+                b["label"][:22], b["n"] // 60, b["n"] % 60, b["avg_hr"], b["max_hr"], w))
+        if len(blocks) > 40:
+            print(f"    ... y {len(blocks) - 40} bloques mas")
     if res.get("csv"):
         print(f"  CSV : {res['csv']}")
     if res.get("fit"):

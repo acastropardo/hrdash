@@ -372,3 +372,48 @@ El plan elegido se sigue durante la sesion. El reloj del plan es el de `Session`
   sesion real bajo Xvfb con `--simulate --now` (tira y arco en la ventana, columna en el CSV).
   Auditorias de menu, dials y el smoke del FIT sin cambios.
 - No hecho (fase 5): un lap por bloque en el FIT, resumen por bloque, pausa y la prueba con GPU real.
+
+## Estado de la fase 5 (hecha, salvo la prueba con GPU real)
+
+- **Un lap por bloque en el FIT** (`export.export_fit`): `Session.blocks()` agrupa las muestras
+  consecutivas con el mismo `bloque` (el tramo final "libre" cuenta) y cada tramo es un `lap` con su
+  FC, potencia, cadencia, velocidad, distancia, kcal y tiempo por zona; `num_laps` de la sesion es el
+  numero de tramos. Sin plan sigue habiendo un solo lap. `validate_fit` ahora tambien compara el
+  numero de laps con el esperado.
+- **Resumen final por bloque** (`cli.print_summary`): una linea por bloque (tiempo, FC media y maxima,
+  W medios), tope de 40 lineas.
+- **Pausa**: `espacio` en la ventana (solo rodando; en el menu sigue siendo "activar"). Congela el
+  reloj de la sesion y del plan (`Session.pause/resume`, `elapsed_s` no cuenta la pausa), no anota
+  muestras y descarta la distancia que el rodillo siga contando (`_pause_dist`). Cartel PAUSA en el
+  tablero y la pista (`cluster.pause_hud`); las vistas FC y watts no tienen capa HUD y no lo muestran.
+  El FIT lleva `total_timer_time` sin la pausa y el resumen imprime el tiempo en pausa. Salir en
+  pausa cierra la pausa antes de grabar.
+- Verificacion: `plan_check.py` ampliado (tramos, FIT con 4 laps decodificado, suma de laps, sin plan 1
+  lap, pausa: reloj congelado, sin muestras, distancia continua, snapshot) y una sesion real bajo Xvfb
+  con plan corto y pausa: 4 cambios de bloque, tabla del resumen, CSV por bloque y FIT round-trip OK.
+- **Pendiente en tu Mac** (no se puede probar aqui): clic al abrir la ventana, tamano con Retina, BLE
+  real, fluidez con GPU real (vista mixta), pausa con espacio y la tira del plan con tu banda y rodillo.
+
+## Fase 6 (analisis): dos monitores
+
+Factible. Lo que ya hay y lo que falta:
+
+- `glview.open_windows` ya tiene un modo "una ventana por monitor" (`multi_mode`: 2+ vistas y al menos
+  tantos monitores como vistas): crea una ventana por vista, cada una con su contexto moderngl y
+  `swap_interval(0)`. Nunca se ha probado con dos pantallas reales; si algo falla vuelve al split en una
+  sola ventana. En este Linux (Mesa) se comprobo que dos ventanas con dos contextos moderngl se crean
+  y dibujan sin problema, asi que la preocupacion del comentario del codigo (que el segundo contexto
+  no se detecta) no se reproduce aqui; en macOS hay que probarlo.
+- Falta, para "pista arriba y tacometros abajo": (1) **asignar vista a monitor por posicion**, no por
+  el orden de `glfw.get_monitors()`: ordenar por `get_monitor_pos` de arriba a abajo (o `--monitor-view
+  pista=1 gauge=2`) y abrir cada ventana en su monitor; (2) que cada ventana dibuje el HUD que le toca
+  (la tira del plan y el cartel PAUSA deberian ir en la de los tacometros o en las dos); (3) un solo
+  vsync para las dos ventanas (hoy en modo multiple se apaga y se limita a ~60 fps por reloj; hay que
+  medir tirones); (4) el menu previo a Play seguiria en el monitor principal y al iniciar se abre la
+  segunda ventana; (5) cerrar una ventana o desconectar un monitor debe volver al split sin matar el hijo.
+- Verificacion posible aqui: Xvfb con dos pantallas (Xinerama) para la logica de asignacion y que ambas
+  ventanas dibujen; la fluidez y el comportamiento en macOS (Spaces, ventanas a pantalla completa en el
+  segundo monitor) solo se confirman en tu Mac.
+- Riesgo principal: dos contextos GL por proceso en macOS (CoreVideo/vsync por pantalla). Alternativa
+  si falla: una sola ventana sin bordes que ocupe los dos monitores apilados (solo funciona si macOS
+  tiene desactivado "las pantallas tienen Spaces independientes").

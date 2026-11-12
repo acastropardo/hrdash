@@ -784,9 +784,9 @@ def scene_watts(snap, anim, aspect=1.6):
 
 def scene_gauge(snap, anim, aspect=1.6):
     """Cluster completo: los 4 diales + tira digital, llenando la ventana."""
-    from .cluster import CLUSTER, plan_hud        # lazy: cluster importa de aqui
+    from .cluster import CLUSTER, plan_hud, pause_hud        # lazy: cluster importa de aqui
     layers, cam = CLUSTER.build(snap, anim, aspect)
-    plan = plan_hud(snap, anim, aspect, top=True)
+    plan = plan_hud(snap, anim, aspect, top=True) + pause_hud(snap, anim, aspect)
     if plan:                                      # con un plan en curso, tira de bloque encima
         return layers + plan, cam + (80.0, True)
     return layers, cam
@@ -2027,8 +2027,8 @@ def child_main() -> None:
                     add_zoom(next((s for s in slots if s[0] in ZOOMABLE), None),
                              STEP_ZOOM * (1 if name == "+" else -1))
                     return
-            if name in MENU_ONLY:
-                return                       # solo tienen sentido en el menu
+            if name in MENU_ONLY and not (standalone and name == "space"):
+                return                       # solo tienen sentido en el menu (espacio pausa al rodar)
             _emit({"key": name})
 
         def menu_slot(win):
