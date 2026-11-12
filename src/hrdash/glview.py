@@ -1488,10 +1488,14 @@ def scene_pista(snap, anim, aspect=1.6):
         # sigue rodando por inercia y se queda donde lo deja la frenada (no lo jala el snap).
         anim["frac"] = (anim["frac"] + anim["v"] * anim["dt"] / TRACK_LEN) % 1.0
     anim["anchor"] = frac
-    anim["crank"] = anim["crank"] + (anim["c"] / 60.0) * 2 * math.pi * anim["dt"]
+    # Sentido de giro: `crank` y `roll` son angulos en el plano de la bici (s = avance, h = altura)
+    # y pedalear / rodar hacia adelante es en sentido HORARIO en ese plano (el pie de arriba va
+    # hacia adelante y baja; la parte alta de la rueda avanza), es decir con el angulo DECRECIENDO.
+    # Antes crecian y el ciclista pedaleaba y las ruedas rodaban al reves, mientras la bici avanzaba.
+    anim["crank"] = anim["crank"] - (anim["c"] / 60.0) * 2 * math.pi * anim["dt"]
     # La rueda gira por distancia recorrida (theta = arco / radio), no por la cadencia:
     # asi los radios se paran cuando el rider se queda, no siguen contando pedaladas.
-    anim["roll"] = anim["roll"] + anim["v"] * anim["dt"] / WR
+    anim["roll"] = anim["roll"] - anim["v"] * anim["dt"] / WR
 
     col = _hex(snap.get("zone_color") or "#22d3ee")
     bx, by, btx, bty, bank = _at(pts, anim["frac"])
