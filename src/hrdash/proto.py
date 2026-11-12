@@ -139,7 +139,11 @@ def layers_to_json(layers) -> list:
     """
     out = []
     for name, mesh in layers:
-        out.append({"layer": name, "v": None if mesh is None else list(mesh.v)})
+        item = {"layer": name, "v": None if mesh is None else list(mesh.v)}
+        fmt = getattr(mesh, "fmt", None)
+        if fmt:
+            item["fmt"] = fmt                  # p. ej. "deck": otro formato de vertice
+        out.append(item)
     return out
 
 

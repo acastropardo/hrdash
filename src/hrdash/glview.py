@@ -36,11 +36,11 @@ void main(){
     v_world = in_position;
 }"""
 
-FS = """#version 330
-in vec3 v_color; in vec3 v_normal; in float v_light; in vec3 v_world;
-out vec4 o;
+# Luz del pabellon, compartida por el programa general y el de la cubierta: si cada uno
+# llevara su copia, el tablon y el resto de la escena acabarian con luces distintas.
+SHADE = """
 uniform vec3 EYE;
-void main(){
+vec4 shade(vec3 v_color, vec3 v_normal, float v_light, vec3 v_world){
     vec3 N = normalize(v_normal);
     // Pabellon: luz principal calida (3000K), relleno frio y rebote del madera.
     // Con una sola luz fria plana el velodromo sale gris; las referencias muestran
@@ -56,8 +56,14 @@ void main(){
     vec3 glow = v_color * 1.22;
     vec3 col = clamp(mix(lit, glow, clamp(v_light, 0.0, 1.0)), 0.0, 1.0);
     float fog = clamp(1.0 - exp(-length(EYE - v_world) * 0.011), 0.0, 1.0);
-    o = vec4(mix(col, vec3(0.052, 0.060, 0.075), fog), 1.0);
+    return vec4(mix(col, vec3(0.052, 0.060, 0.075), fog), 1.0);
 }"""
+
+FS = """#version 330
+in vec3 v_color; in vec3 v_normal; in float v_light; in vec3 v_world;
+out vec4 o;
+""" + SHADE + """
+void main(){ o = shade(v_color, v_normal, v_light, v_world); }"""
 
 FLOOR = (0.09, 0.10, 0.13)
 VATTR = "3f 3f 3f 1f"                     # posicion, normal, color, emisivo
@@ -70,11 +76,6 @@ GRID = (0.19, 0.22, 0.27)
 # luz, asi que el albedo se pone un poco por encima del valor de foto para que coincida.
 WOOD = (0.735, 0.635, 0.494)              # tablon, albedo medio (#bba17e)
 WOOD_D = (0.660, 0.569, 0.439)            # junta entre tablones (la base, mas oscura)
-# Tono por tablon: la variacion es pequeña y constante a lo largo del tablon. Con variacion
-# por cuadro la pista sale en "ladrillos" (parquet), no en tablones largos.
-WOODS = [WOOD, (0.761, 0.660, 0.514), (0.708, 0.610, 0.471), (0.782, 0.678, 0.533),
-         (0.745, 0.645, 0.502), (0.694, 0.598, 0.463), (0.754, 0.652, 0.508),
-         (0.720, 0.622, 0.482), (0.768, 0.666, 0.520), (0.715, 0.616, 0.476)]
 APRON = (0.246, 0.345, 0.478)             # apron de hormigon pintado, en el interior
 SHADOW = (0.098, 0.105, 0.118)
 AZUR = (0.216, 0.329, 0.490)              # cote d'azur: el azul del borde interior
@@ -96,11 +97,20 @@ ROOF = (0.190, 0.172, 0.145)              # cupula: gris calido, no neutro
 LAMP = (0.941, 0.863, 0.651)              # lamparas calidas colgadas
 INFIELD = (0.106, 0.122, 0.149)
 
+# Cubierta por shader (Fase 2): un velodromo real es de listones de pino de 4-5 cm a lo
+# largo de la marcha, con testas escalonadas. Como geometria eso serian cientos de cintas;
+# en el fragment shader es una funcion de (s, q) = (metros desde meta, metros desde el
+# borde interior), filtrada con fwidth para que de lejos se promedie en vez de hacer moire.
+SLAT, SLAT_L, SLAT_J = 0.05, 4.0, 0.0025  # liston: ancho, largo, junta (m)
+DECK_STEP = 0.5                           # subdivision lateral de la malla de cubierta (m)
+# Lineas pintadas, medidas desde el borde interior: (centro, color, ancho).
+PAINT = ((0.10, "AZUR", 0.20), (0.24, "LINE_BLACK", 0.05), (0.94, "LINE_RED", 0.05),
+         (4.30, "LINE_BLUE", 0.05), (9.95, "LINE_WHITE", 0.05))
+
 HALF_W = 5.0                         # ancho de pista: 8 calles de 1,22 m
 TRACK_LEN = 400.0                    # perimetro del trazado (a escala real, 1 u = 1 m)
 TRACK_W = 10.0                       # 0..10 es la coordenada lateral desde el borde interior
 DECK = 1.05                          # el tablon esta elevado sobre el piso del recinto
-PLANK = 0.24                         # ancho del tablon (junta en el sentido de marcha)
 WALL_H = 0.90                        # muro de seguridad sobre el borde exterior
 STAND_ROWS, STAND_RUN, STAND_RISE = 11, 0.85, 0.40      # gradas escalonadas
 ROOF_H, LAMP_H = 13.5, 6.5           # altura del cercho y de las lamparas colgadas
@@ -126,6 +136,147 @@ ZCOLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
 
 MSAA = 4                            # muestras por pixel pedidas a GLFW
 A0, SWEEP = 225.0, 270.0            # barrido del dial (igual que gauges.py)
+
+DECK_VATTR = "3f 3f 2f 1f"                # posicion, normal, (s, q), calidez del charco de luz
+DECK_FIELDS = ("in_position", "in_normal", "in_uv", "in_warm")
+
+DECK_VS = """#version 330
+in vec3 in_position; in vec3 in_normal; in vec2 in_uv; in float in_warm;
+out vec3 v_normal; out vec2 v_uv; out float v_warm; out vec3 v_world;
+uniform mat4 mvp;
+void main(){
+    gl_Position = mvp * vec4(in_position, 1.0);
+    v_normal = in_normal; v_uv = in_uv; v_warm = in_warm; v_world = in_position;
+}"""
+
+
+def _glsl_vec(col) -> str:
+    return "vec3(%.4f, %.4f, %.4f)" % tuple(col)
+
+
+def _deck_fs() -> str:
+    """Fragment shader de la cubierta, con las constantes de Python incrustadas (una sola
+    fuente para medidas y colores)."""
+    paint = "\n".join(
+        "    c = mix(c, %s, box(q, %.4f, %.4f, aq));" % (_glsl_vec(globals()[name]), d, w / 2.0)
+        for d, name, w in PAINT)
+    return """#version 330
+in vec3 v_normal; in vec2 v_uv; in float v_warm; in vec3 v_world;
+out vec4 o;
+""" + SHADE + """
+float hash(float n){ return fract(sin(n * 12.9898 + 78.233) * 43758.5453); }
+// Cobertura exacta (filtro de caja de ancho aa) de la banda [c-hw, c+hw]: una linea de
+// 5 cm a 60 m ocupa menos de un pixel y se atenua en vez de parpadear.
+float box(float x, float c, float hw, float aa){
+    return (clamp(x + aa * 0.5, c - hw, c + hw) - clamp(x - aa * 0.5, c - hw, c + hw)) / aa;
+}
+// Integral de un tren de juntas de fraccion j por periodo: con ella la junta se filtra igual.
+float pulseI(float x, float j){ return floor(x) * j + max(0.0, fract(x) - (1.0 - j)); }
+float joints(float x, float j, float aa){ return (pulseI(x + aa * 0.5, j) - pulseI(x - aa * 0.5, j)) / aa; }
+void main(){
+    float s = v_uv.x, q = v_uv.y;
+    float aq = max(fwidth(q), 1e-5), as_ = max(fwidth(s), 1e-5);
+    float k = floor(q / %(W).4f);
+    float sk = s / %(L).4f + hash(k + 3.0);           // testas escalonadas por liston
+    // Tono por liston: solo donde el liston se resuelve; de lejos se queda en el tono medio
+    // (un hash por pixel a esa distancia es ruido, no madera).
+    float detail = clamp(%(W).4f / (aq * 2.5) - 0.4, 0.0, 1.0);
+    float tone = (hash(k * 1.731 + floor(sk) * 17.17) - 0.5) * 0.11 * detail;
+    vec3 c = %(WOOD)s * (1.0 + tone);
+    float jl = joints(q / %(W).4f, %(JW).4f, aq / %(W).4f);         // junta entre listones
+    float jt = joints(sk, %(JL).5f, as_ / %(L).4f);               // testa
+    c = mix(c, %(WOOD_D)s, clamp(jl + jt, 0.0, 1.0) * 0.85);
+""" % {"W": SLAT, "L": SLAT_L, "JW": SLAT_J / SLAT, "JL": SLAT_J / SLAT_L,
+       "WOOD": _glsl_vec(WOOD), "WOOD_D": _glsl_vec(WOOD_D)} + paint + """
+    c = min(c * v_warm, vec3(1.0));
+    o = shade(c, v_normal, 0.0, v_world);
+}"""
+
+
+class DeckMesh:
+    """Cubierta de la pista en formato propio (`DECK_VATTR`): la dibuja `DECK_FS`.
+
+    `fmt` le dice al bucle de render que programa usar. Si ese programa no compila,
+    `to_mesh()` la convierte al formato general en madera lisa: peor aspecto, pero la
+    ventana no muere por un driver quisquilloso.
+    """
+
+    __slots__ = ("v",)
+    fmt = "deck"
+
+    def __init__(self):
+        self.v: list[float] = []
+
+    def vert(self, p, n, s, q, warm) -> None:
+        self.v.extend((p[0], p[1], p[2], n[0], n[1], n[2], s, q, warm))
+
+    def to_mesh(self) -> "Mesh":
+        m = Mesh()
+        for i in range(0, len(self.v), 9):
+            x, y, z, nx, ny, nz, _s, _q, w = self.v[i:i + 9]
+            m.v.extend((x, y, z, nx, ny, nz, *_warm(WOOD, w), 0.0))
+        return m
+
+    @property
+    def tris(self) -> int:
+        return len(self.v) // 27
+
+
+def build_deck(pts, warm) -> DeckMesh:
+    """Malla de la cubierta: filas cada metro del trazado, columnas cada `DECK_STEP`.
+
+    La subdivision lateral es lo que la mantiene pegada a la superficie en la rampa de
+    peralte (un quad de 10 m de ancho se tuerce y su diagonal se separa cm). Las normales
+    son por vertice, asi la luz pasa suave de la recta a la curva.
+    """
+    d = DeckMesh()
+    n = len(pts) - 1
+    cols = int(round(TRACK_W / DECK_STEP))
+    qs = [TRACK_W * j / cols for j in range(cols + 1)]
+    rows = []
+    for i, pt in enumerate(pts):
+        s = TRACK_LEN * i / n
+        row = []
+        for q in qs:
+            p, nrm, _h = _surf(pt, q)
+            row.append((p, nrm, s, q, warm(p)))
+        rows.append(row)
+    for r0, r1 in zip(rows, rows[1:]):
+        for j in range(cols):
+            a, b, c, e = r0[j], r0[j + 1], r1[j + 1], r1[j]
+            for v in (a, b, c, a, c, e):
+                d.vert(*v)
+    return d
+
+
+_DECK_PROGS: dict = {}
+
+
+def _deck_prog(ctx):
+    """Programa de la cubierta para este contexto (uno por contexto, compilado una vez).
+    Devuelve None si no compila: el llamador cae a `DeckMesh.to_mesh()`."""
+    got = _DECK_PROGS.get(id(ctx))
+    if got is not None and got[0] is ctx:
+        return got[1]
+    try:
+        prog = ctx.program(vertex_shader=DECK_VS, fragment_shader=_deck_fs())
+    except Exception as exc:  # noqa: BLE001 - un shader que no compila no tumba la ventana
+        _emit({"warn": f"cubierta sin shader: {type(exc).__name__}: {exc}"[:300]})
+        prog = None
+    _DECK_PROGS[id(ctx)] = (ctx, prog)
+    return prog
+
+
+def _upload(ctx, prog, mesh, np, moderngl):
+    """VAO de una capa con el programa y el formato que pide la malla."""
+    if getattr(mesh, "fmt", None) == "deck":
+        dprog = _deck_prog(ctx)
+        if dprog is not None:
+            buf = ctx.buffer(np.asarray(mesh.v or [0.0] * 9, dtype="f4").tobytes())
+            return ctx.vertex_array(dprog, [(buf, DECK_VATTR, *DECK_FIELDS)]), dprog
+        mesh = mesh.to_mesh()
+    buf = ctx.buffer(np.asarray(mesh.v or [0.0] * 10, dtype="f4").tobytes())
+    return ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)]), prog
 
 
 def _hex(col) -> tuple[float, float, float]:
@@ -598,17 +749,8 @@ def build_static(pts):
     # Piso del recinto: liso, sin grilla (a esta escala las lineas de 5 m no pintan).
     m.floor(size=110, step=0.0, col=INFIELD, z0=-0.05)
 
-    # Tablon de pino: la junta va en el sentido de marcha, que es como se lee desde la chase.
-    # Primero la base (mas oscura) y encima cada tablón algo mas claro, dejando 1 cm de junta:
-    # sin esa junta la pista se lee como una superficie pintada a rayas, no como madera.
-    # La base va partida por tablon, no como una sola cinta de 10 m: en la rampa de peralte
-    # el quad de 10 m se tuerce entre muestras, su diagonal se separa varios cm de la
-    # superficie real y asomaba entre tablones y lineas como un escalonado.
-    for i in range(math.ceil(TRACK_W / PLANK)):
-        d0, d1 = i * PLANK, min(TRACK_W, (i + 1) * PLANK)    # el ultimo se recorta al borde
-        off, half = (d0 + d1) / 2.0 - HALF_W, (d1 - d0) / 2.0
-        m.ribbon(pts, half, WOOD_D, off=off, tint=warm)
-        m.ribbon(pts, half - 0.012, WOODS[i % len(WOODS)], off=off, tint=warm, lift=0.004)
+    # El tablon y las lineas pintadas a lo largo van en la capa `deck` (`build_deck`), con
+    # su propio shader; aqui solo queda lo que no es cubierta.
 
     # Apron: el hormigon pintado del interior, en el nivel del tablon. No sigue el peralte
     # (es zona llana), por eso no se puede usar ribbon, que inclina con bank.
@@ -619,12 +761,6 @@ def build_static(pts):
         a1 = (p1[0] - h1[0] * 1.8, p1[1] - h1[1] * 1.8, DECK)
         cs = (_warm(APRON, warm(a0)), _warm(APRON, warm(a1)), _warm(APRON, warm(p1)), _warm(APRON, warm(p0)))
         m.vquad(a0, a1, p1, p0, cs, (0.0, 0.0, 1.0))
-
-    # Lineas pintadas, medidas desde el borde interior: cote d'azur, linea negra (la de
-    # referencia, por la que se rueda), roja del sprinter, azul del stayer y borde exterior.
-    for d, col, w in ((0.10, AZUR, 0.20), (0.24, LINE_BLACK, 0.05), (0.94, LINE_RED, 0.05),
-                      (4.30, LINE_BLUE, 0.05), (TRACK_W - 0.05, LINE_WHITE, 0.05)):
-        m.ribbon(pts, w / 2.0, col, off=d - HALF_W, light=0.14, tint=warm, lift=0.010)
 
     # Marcas transversales UCI. La meta no es un damero: es una banda blanca con una linea
     # negra fina en el centro, en el punto que cierra la vuelta. La linea de 200 m (blanca)
@@ -863,9 +999,10 @@ def scene_pista(snap, anim, aspect=1.6):
         pts = anim["pts"] = track()
     if anim.get("static") is None:
         anim["static"] = build_static(pts)
-        layers = [("static", anim["static"])]
+        anim["deck"] = build_deck(pts, _pool(_lamps(pts)))
+        layers = [("static", anim["static"]), ("deck", anim["deck"])]
     else:
-        layers = [("static", None)]                 # VBO vivo: la pista no se reconstruye
+        layers = [("static", None), ("deck", None)]  # VBO vivo: la pista no se reconstruye
     m = Mesh()
 
     # Inercia: la telemetria no cambia de golpe. 3,0 m/s^2 para acelerar, 2,5 para frenar
@@ -1516,17 +1653,19 @@ def child_main() -> None:
                     old = vaos.get(name)
                     if old is not None:
                         old.release()
-                    buf = ctx.buffer(np.asarray(mesh.v or [0.0] * 10, dtype="f4").tobytes())
-                    vaos[name] = ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)])
+                    vaos[name], _p = _upload(ctx, prog, mesh, np, moderngl)
                 eye, center, up, fovy = cam[:4]
                 far = cam[4] if len(cam) > 4 else 80.0     # la pista necesita mas fondo
                 mvp = perspective(fovy, vw / vh, 0.1, far) @ look_at(eye, center, up)
-                prog["mvp"].write(np.ascontiguousarray(mvp.T, dtype="f4").tobytes())
-                try:
-                    # EYE: el brillo y la niebla del pabellon se calculan desde la camara.
-                    prog["EYE"].write(np.asarray(eye, dtype="f4").tobytes())
-                except Exception:  # noqa: BLE001 - program sin ese uniform (shader antiguo)
-                    pass
+                # Cada VAO lleva su programa (el general o el de la cubierta): los dos reciben
+                # la misma camara.
+                for pr in {id(va.program): va.program for va in vaos.values()}.values() or [prog]:
+                    pr["mvp"].write(np.ascontiguousarray(mvp.T, dtype="f4").tobytes())
+                    try:
+                        # EYE: el brillo y la niebla del pabellon se calculan desde la camara.
+                        pr["EYE"].write(np.asarray(eye, dtype="f4").tobytes())
+                    except Exception:  # noqa: BLE001 - program sin ese uniform (shader antiguo)
+                        pass
                 for va in vaos.values():
                     va.render(moderngl.TRIANGLES)
                 glfw.swap_buffers(win)

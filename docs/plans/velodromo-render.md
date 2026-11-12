@@ -112,6 +112,29 @@ Captura lateral: se lee como un muneco de palos, no como un ciclista.
 - El charco de luz de las lamparas tambien en el shader (hoy se hornea por vertice).
 - No toca el `VATTR` del resto de escenas: el cluster sigue con su programa.
 
+**Estado: hecha** (sobre la geometria actual de 400 m; la Fase 1 solo cambia `track()`).
+
+- Capa nueva `deck` (`DeckMesh`, formato `DECK_VATTR` = posicion, normal, `(s, q)`,
+  calidez) construida por `build_deck()`: filas cada metro, columnas cada `DECK_STEP`
+  (0,5 m), normales por vertice. Sustituye las ~41 cintas de tablon, sus bases y las 5
+  cintas de lineas: 107k -> 36k tris estaticos + 16k de cubierta.
+- `DECK_FS` (generado por `_deck_fs()` con las constantes de Python incrustadas): listones
+  de 5 cm con testas escalonadas cada 4 m, tono por liston que se apaga con la distancia,
+  juntas y lineas pintadas filtradas con un filtro de caja exacto sobre `fwidth` (no hay
+  moire ni parpadeo de lejos, ni z-fighting porque no hay capas superpuestas).
+- La luz del pabellon vive en `SHADE` y la comparten `FS` y `DECK_FS`.
+- `_upload()` elige programa y formato por capa (`mesh.fmt`); el programa de la cubierta se
+  compila una vez por contexto (`_deck_prog`). Si no compila emite `warn` y la cubierta cae
+  a `to_mesh()` (madera lisa sin lineas) con el programa general: la ventana sigue viva.
+- `proto.layers_to_json` anade `fmt` a las capas con otro formato de vertice.
+- Las marcas transversales (meta, 200 m, persecucion) siguen como geometria con lift 12 mm.
+- Verificado: capturas (chase recta, curva, lateral, lejana, meta, POV y respaldo sin
+  shader), torsion maxima de quad de cubierta 6,7 mm (< lift de las marcas), cubierta en
+  q 0..10 y s 0..400, ventana GLFW real sin `warn` ni `err` a ~26 fps con llvmpipe (antes
+  ~22), escenas `hr`/`watts`/`gauge` construyen igual, smoke FIT OK.
+- Ojo: las sombras de contacto del ciclista van a 6 mm sobre la superficie, casi la
+  torsion maxima; si en la rampa de peralte asoman, bajar `DECK_STEP` a 0,25.
+
 ### Fase 3 - ciclista nuevo
 
 - Proporciones de un atleta de ~1,75 m en bici de pista: rueda 700c (R 0,335), pedalier a

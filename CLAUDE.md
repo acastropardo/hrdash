@@ -39,6 +39,16 @@ XDG_CONFIG_HOME=/tmp/hrdash_xdg .venv/bin/hrdash --simulate --3d --3d-view gauge
   `docs/plans/3d-standalone.md`, "Bug corregido"). Fake-glfw harnesses do not catch this.
 - If the window never opens (`err` before `win`), `cmd_3d` exits 2 — but still exports.
 
+## Pista deck layer
+
+`scene_pista` returns a `deck` layer (`DeckMesh`, `fmt = "deck"`) with its own vertex
+format (`DECK_VATTR`: position, normal, track coords `(s, q)`, baked lamp warmth) and its own
+program (`DECK_VS` / `_deck_fs()`): planks, joints and the longitudinal painted lines are
+procedural in the fragment shader, filtered with `fwidth`. `_upload()` picks program and
+format per layer; if the deck program fails to compile it falls back to `to_mesh()` (plain
+wood, general program). Lighting is shared through the `SHADE` GLSL snippet. Plans and
+offscreen-render checks for this work are in `docs/plans/velodromo-render.md`.
+
 ## Other drawing modules
 
 `pixels.py` is the shared braille framebuffer (2×4 px per cell, z-ordered) used by
