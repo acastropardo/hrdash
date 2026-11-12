@@ -60,6 +60,7 @@ Teclas dentro del dashboard:
 | `3` | abre/cierra la **ventana OpenGL nativa** con la escena 3D de la vista activa |
 | `←` / `→` | navegar entre vistas: **FC → watts → tablero → pista** (la ayuda marca la activa) |
 | `[` / `]` | en la vista pista: recorre los largos de vuelta (1, 2, 3, **5**, 10, 20 km) |
+| `v` | en la ventana 3D de la pista: cambia la camara (persecucion, TV fija, grua) |
 
 ### Ventana 3D (`3`)
 

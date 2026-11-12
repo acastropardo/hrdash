@@ -60,7 +60,7 @@ def hints_text(view: str, note: str = "") -> Text:
             t.append(f"{VIEW_KEYS[v]} {VIEW_NAMES[v]}", style="bold #f8fafc")
         else:
             t.append(VIEW_KEYS[v], style="#9ca3af")
-    t.append(" · 3: dashboard · r: race (rueda: zoom, arrastre: orbita) · + -: zoom · [ ]: largo vuelta",
+    t.append(" · 3: dashboard · r: race (rueda: zoom, arrastre: orbita) · + -: zoom · v: camara · [ ]: largo vuelta",
              style="#6b7280")
     if note:
         t.append(f" · {note}", style="bold #f97316")
@@ -159,6 +159,7 @@ class HRDash(App):
         ("]", "cycle_lap(1)", "Vuelta mas larga"),
         ("+", "zoom_view(1)", "Acercar camara 3D"),
         ("-", "zoom_view(-1)", "Alejar camara 3D"),
+        ("v", "cam_view", "Camara de la pista 3D"),
     ]
 
     CSS = """
@@ -222,6 +223,7 @@ class HRDash(App):
         self._gl_msg = ""         # aviso de la ventana 3D (cerrada / sin dependencias)
         self._gl_focus: dict = {}   # vista -> ventana enfocada (sin foco no llegan teclas ni clics)
         self._gl_cmd: list = [0, 0]   # (nonce, delta) de zoom: el hijo lo aplica una sola vez
+        self._cam_cmd = 0             # contador de `v`: el hijo pasa al siguiente modo de camara
         self._beat_t0 = time.time()
         self._beat_period = 1.0
         self._heart_lvl = -1      # ultimo nivel dibujado (evita redibujos)
@@ -323,6 +325,14 @@ class HRDash(App):
             LAP_PRESETS.append(int(self.config.lap_m))
             i = LAP_PRESETS.index(int(self.config.lap_m))
         self._set_lap_m(LAP_PRESETS[(i + delta) % len(LAP_PRESETS)])
+
+    def action_cam_view(self) -> None:
+        """`v`: siguiente camara de la pista 3D (persecucion, TV fija, grua). Como el zoom, es
+        estado del hijo: la TUI solo manda un contador que cambia."""
+        if not self.gl or self._glhost is None:
+            return
+        self._cam_cmd += 1
+        self._push_gl()
 
     def action_zoom_view(self, delta: int) -> None:
         """`+` y `-`: acercan o alejan la camara de la vista 3D (la rueda hace lo mismo).
@@ -428,7 +438,8 @@ class HRDash(App):
         return proto.build_snapshot(self.session, self.config, self.laps,
                                     self.hr, self.tr,
                                     view=self.view, views=self.gl_views,
-                                    zoom_cmd=self._gl_cmd, standalone=False)
+                                    zoom_cmd=self._gl_cmd, standalone=False,
+                                    cam_cmd=self._cam_cmd)
 
     def _push_gl(self) -> None:
         if not (self.gl and self._glhost is not None):

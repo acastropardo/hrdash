@@ -237,6 +237,27 @@ Captura lateral: se lee como un muneco de palos, no como un ciclista.
 - Interior (infield) con zona de equipos, valla publicitaria en el muro.
 - Presets de camara tipo TV (lateral desde el infield, cenital de curva) ademas de chase/POV.
 
+**Estado: hecha.**
+
+- Sombra: capa `shadow` (`ShadowMesh`, formato `3f 2f` = posicion, (radio, fuerza)) con su
+  programa y mezcla multiplicativa (`DST_COLOR, ZERO`): oscurece el tablon del shader sin
+  taparlo. Una elipse alargada bajo el conjunto y dos de contacto en las ruedas. Sin su
+  programa no se dibuja. `FORMATS` reune los formatos propios (deck y shadow): `_fmt_prog`
+  los compila una vez por contexto, `_upload` elige formato y `_draw` aplica la mezcla
+  (moderngl 5.13 no tiene `VertexArray.extra`: el formato de cada VAO va en `_VA_FMT`).
+- Publicidad: la barandilla en paneles de 6 m (`AD_L`) de color plano con un "logo" claro,
+  y lonas en el fronton de las rectas.
+- Zona interior (`_infield`): suelo deportivo, lineas de una pista polideportiva de 28 x 15 m
+  y 8 boxes de equipos (alfombra, biombo, banco, rodillo) en la recta opuesta.
+- Camaras (`CAM_MODES`, tecla `v`): chase (la de siempre, con zoom y POV), tv (8 camaras
+  fijas en la zona interior, corte a la siguiente al pasar, fovy que sigue la distancia) y
+  grua (por dentro y por encima, acompanando). `v` se resuelve en la ventana en los dos
+  modos; desde la TUI viaja como contador `cam_cmd` en el snapshot (`proto` lo declara).
+- Verificado: capturas offscreen de los tres modos, lateral, lejana y chase; `hrdash
+  --simulate` real en tmux + Xvfb con `r` y `v` dos veces (chase -> tv -> grua) y `q`
+  (round-trip OK 65/65); ventana sin `err` (~28 fps llvmpipe); `scene_pista` ~3 ms/frame en
+  los tres modos; capas serializables a JSON; smoke FIT OK. 31,6k tris estaticos.
+
 ## Como se verifica
 
 - Harness offscreen (fuera del repo) con Xvfb: las 5 capturas de arriba antes/despues de
