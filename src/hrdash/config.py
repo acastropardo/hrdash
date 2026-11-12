@@ -7,6 +7,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import workouts
 from .zones import DEFAULT_ZONE_PCTS, build_zones
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "hrdash"
@@ -33,6 +34,7 @@ class Config:
     lap_m: int = 5000            # largo de vuelta de la vista pista (en metros)
     last_device: str | None = None  # nombre o direccion de la ultima banda
     last_trainer: str | None = None  # nombre o direccion del ultimo rodillo
+    workout: workouts.Workout | None = None   # ultimo plan por bloques/intervalos (None = libre)
 
     def computed_hrmax(self) -> int:
         return self.hrmax if self.hrmax else default_hrmax(self.age)
@@ -57,6 +59,11 @@ def load_config() -> Config:
                   "export_fit", "export_csv", "last_device", "last_trainer"):
             if k in data:
                 setattr(cfg, k, data[k])
+        if "workout" in data:
+            try:
+                cfg.workout = workouts.from_dict(data["workout"])
+            except Exception:  # noqa: BLE001 - un plan roto no debe impedir arrancar
+                cfg.workout = None
         if "zone_pcts" in data and len(data["zone_pcts"]) == 5:
             cfg.zone_pcts = [list(p) + [None] * (2 - len(p)) for p in data["zone_pcts"]]
     return cfg
@@ -87,6 +94,8 @@ def save_config(cfg: Config) -> None:
         lines.append(f'last_device = "{cfg.last_device}"')
     if cfg.last_trainer:
         lines.append(f'last_trainer = "{cfg.last_trainer}"')
+    if cfg.workout is not None:
+        lines.append("workout = " + workouts.to_toml_inline(workouts.to_dict(cfg.workout)))
     CONFIG_PATH.write_text("\n".join(lines) + "\n")
 
 

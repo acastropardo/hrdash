@@ -78,6 +78,15 @@ with `draw_text(align="c")` (ink width) and digits with `digits_extent`, never w
 `text_w`/`digits_w` (they include trailing gaps and blank cells). Keep dial text at z = 0.06:
 a higher z shifts it under perspective in the bottom dials.
 
+## Workout plans
+
+`workouts.py` is the pure model for the pre-session menu feature (plan:
+`docs/plans/menu-entrenamiento.md`): `Block`/`Repeat` -> `Workout`, `at(t)` for "which block am I
+in", `resolve_target` (power if present, else HR, else stopwatch only), presets, and
+`to_dict`/`to_toml_inline` for `config.toml` and the window protocol. No UI/BLE imports; keep it
+that way so it stays checkable headless. `Repeat.between` goes *between* repetitions, not after
+the last one.
+
 ## Other drawing modules
 
 `pixels.py` is the shared braille framebuffer (2×4 px per cell, z-ordered) used by

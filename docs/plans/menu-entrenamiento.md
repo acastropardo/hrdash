@@ -119,7 +119,7 @@ scripts, `--simulate` y pruebas); `--duration` y `--ascii` no cambian.
 
 0. **Modelo del entrenamiento** (`workouts.py`, puro): `Block`, `Workout`, presets de la tabla,
    validacion y `at(t)`; persistencia en `config.toml`. Sin UI. Harness: suma de cada preset,
-   `at(t)` en los bordes, ida y vuelta TOML.
+   `at(t)` en los bordes, ida y vuelta TOML. **Hecha**, ver "Estado de la fase 0".
 1. **Fases del motor y escena `menu` minima**: `Engine.phase`/`begin()`, `--now`, snapshot
    `phase`, escena con titulo y boton Play (raton y Enter) y evento `ui`. Al pulsar Play arranca
    la sesion. Harness: pulsaciones y clics reales en Xvfb (XTest).
@@ -168,3 +168,33 @@ teclado y raton inyectados.
   [Garmin](https://www.garmin.com/en-GB/blog/cycling-training-zones-guide/).
 - Calentamiento, enfriamiento y 80/20: [join.cc](https://join.cc/cycling-tips/polarized-training-cycling),
   [Carmichael 55 min](https://trainright.com/?p=24030).
+
+## Estado de la fase 0 (hecha)
+
+`src/hrdash/workouts.py`, sin dependencias de UI ni BLE; `config.py` guarda y lee el plan.
+
+- **Modelo**: `Block(name, kind, secs, ftp, hr)` con objetivo en %FTP y/o %FCmax (alto `None` =
+  sin tope) y `Repeat(count, parts, between)`, anidable hasta 3 niveles; la pausa `between` va
+  ENTRE repeticiones, no tras la ultima (asi el noruego da 4 esfuerzos y 3 pausas = 40'). Los
+  presets de la tabla salen de ahi, mas `free(minutos)` y `custom(calent, reps, trabajo s,
+  pausa s, enfriar, ...)` para el editor de la fase 3.
+- **`Workout.at(t)`** devuelve `Position` (bloque, transcurrido, restante, restante total,
+  siguiente, progreso, `done`). 6 us por consulta con 1.000 bloques.
+- **`resolve_target(block, ftp, hrmax, has_power)`**: potencia si hay y el bloque la define; si
+  no FC; si tampoco, `None` (solo cronometro). `Target.status(valor)` da `low`/`ok`/`high`.
+  Los intervalos de 60 s o menos (30/30, Tabata) no llevan objetivo de FC.
+- **Validacion** (`validate`, nunca levanta): nombre, tipo, duracion entera 1..6 h, rangos,
+  repeticiones 1..200, anidado <= 3, <= 2000 bloques expandidos (antes de expandir: un
+  `Repeat(10**9)` no cuelga nada).
+- **Persistencia**: `to_dict`/`from_dict` (la misma forma sirve para mandar el plan a la
+  ventana) y `to_toml_inline`: una linea `workout = {...}` en `config.toml`, solo si hay plan.
+  `load_config` ignora un plan roto en vez de fallar. Rangos abiertos como `[121]`, igual que
+  `zone_pcts`.
+- **Harness** (fuera del repo, `workouts_check.py`): cada preset suma lo de la tabla y valida;
+  estructura (4+3 del noruego, 12+13 del 30/30, 8 del Tabata, repeticion anidada 1/6 y 6/6);
+  `at(t)` segundo a segundo en cada preset (bloque, transcurrido, restante, progreso, orden) y en
+  los bordes de cada bloque, mas negativo, `None`, fracciones y valores enormes; 18 planes
+  invalidos distintos detectados sin excepcion ni cuelgue; builders; `resolve_target` con y sin
+  potencia y sin tope; ida y vuelta JSON y TOML (con comillas, barras y `n`); `config.toml` real
+  (guarda, relee, sin plan no escribe la clave, plan roto se ignora). 0 fallas.
+
