@@ -494,6 +494,14 @@ class SimSensor:
             v = max(62, 150 - (t - 330) * 0.6)
         return v
 
+    def reset_clock(self) -> None:
+        """Reinicia la curva y los acumulados: la simulacion empieza al pulsar Play, no al abrir
+        el menu."""
+        self._t0 = time.time()
+        self._hr = 62.0
+        self.dist_m = 0
+        self.energy_kcal = 0
+
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             t = time.time() - self._t0

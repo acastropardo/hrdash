@@ -122,7 +122,8 @@ scripts, `--simulate` y pruebas); `--duration` y `--ascii` no cambian.
    `at(t)` en los bordes, ida y vuelta TOML. **Hecha**, ver "Estado de la fase 0".
 1. **Fases del motor y escena `menu` minima**: `Engine.phase`/`begin()`, `--now`, snapshot
    `phase`, escena con titulo y boton Play (raton y Enter) y evento `ui`. Al pulsar Play arranca
-   la sesion. Harness: pulsaciones y clics reales en Xvfb (XTest).
+   la sesion. Harness: pulsaciones y clics reales en Xvfb (XTest). **Hecha**, ver "Estado de la
+   fase 1".
 2. **Sensores**: escaneo, lista, asignacion, conexion y valores en vivo, persistencia.
 3. **Sesion**: minutos, presets y editor de intervalos en el menu.
 4. **Plan en ejecucion**: runner, tira de bloque en el HUD, arco objetivo en los diales,
@@ -197,4 +198,38 @@ teclado y raton inyectados.
   invalidos distintos detectados sin excepcion ni cuelgue; builders; `resolve_target` con y sin
   potencia y sin tope; ida y vuelta JSON y TOML (con comillas, barras y `n`); `config.toml` real
   (guarda, relee, sin plan no escribe la clave, plan roto se ignora). 0 fallas.
+
+## Estado de la fase 1 (hecha)
+
+- **Motor** (`engine.py`): `Engine(menu=True)` arranca en `phase = "menu"`: las fuentes conectan
+  y se leen en vivo (`menu_info`), pero `poll()` no anade muestras. `begin()` pasa a `running`:
+  `Session`/`LapTracker` nuevos, el simulador reinicia su reloj (`SimSensor.reset_clock`) y la
+  distancia del rodillo, que corre desde que conecta, se resta (`_dist0`; tambien en `x`).
+  `handle_ui({"act": "play"})` solo actua en fase menu; `x` no hace nada en el menu.
+- **Protocolo** (`proto.py`): claves nuevas `phase` y, solo en fase menu, `menu` (opcional: el
+  hijo ya tolera claves desconocidas, `PROTOCOL` no sube). El hijo contesta `{"ui": {"act": id}}`.
+- **Escena** (`menuview.py`): `menu_widgets(menu, aspecto)` es una funcion PURA que usan igual el
+  dibujo y el hit-test, asi la zona de clic no puede separarse del boton. Se dibuja en capas
+  `hud_*` (camara ortografica de la segunda pasada), con ajuste de texto por ancho real de trazo
+  (`_clip`). Muestra el estado de FC y rodillo (conectado/buscando/error y lectura en vivo) y el
+  boton INICIAR con hover.
+- **Ventana** (`glview.py`): `phase` compartida con los callbacks. En fase menu NINGUNA tecla de
+  vista actua (si no, `g` o las flechas se saltarian el Play): Enter/Espacio/clic = Play,
+  `q`/Esc = salir sin grabar. Al pasar a `running` las vistas se resincronizan con las del motor.
+- **CLI**: `hrdash`/`--3d` abren el menu; `--now` lo salta. En el menu el bucle sondea a 10 Hz
+  (un clic no espera 1 s), manda snapshot a ~2 Hz y uno inmediato tras cada evento. Salir del
+  menu sin Play no exporta y devuelve 0 (2 si la ventana nunca abrio).
+- **Error previo corregido**: `winkey()` usaba `win.value`, pero en glfw-python 2.11 (Linux) la
+  ventana es `LP__GLFWwindow`, sin `.value`: cada callback recibia un objeto distinto y `id(win)`
+  nunca coincidia, asi que `slot_under()` devolvia `None` (hover del menu, y tambien rueda, orbita
+  con arrastre y seguimiento de foco de la pista). Ahora vale la direccion del puntero
+  (`ctypes.cast(win, c_void_p).value`). Verificado con rueda y arrastre reales.
+- **Harness** (fuera del repo; XTest sobre Xvfb): teclas de vista (`g`, `->`, `p`, `r`, `3`, `h`,
+  `w`, `<-`) en el menu no cambian nada y Enter arranca; clic con hover (brillo del boton 108 ->
+  134); Espacio; `q` y Esc salen sin grabar ni crear carpeta de export; `--now` va directo a
+  rodar; el CSV de una sesion tras 10 s de menu empieza en 1 m y solo tiene filas posteriores a
+  Play (8 de ~18 s de ventana abierta); Ctrl+C en el menu y rodando; sin display (`--3d`: exit 2,
+  sin exportar); `workouts_check`, auditoria de dials, escenas y smoke FIT sin cambios.
+- Pendiente de confirmar en el Mac: foco y clic reales (GLFW no entrega botones a una ventana sin
+  foco) y el tamano del boton con HiDPI.
 

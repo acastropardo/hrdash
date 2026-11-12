@@ -1628,7 +1628,14 @@ def _at(pts, f):
             ty0 + (ty1 - ty0) * k, b0 + (b1 - b0) * k)
 
 
-SCENES = {"hr": scene_hr, "watts": scene_watts, "gauge": scene_gauge, "pista": scene_pista}
+def scene_menu(snap, anim, aspect=1.6):
+    """Menu previo a Play (todo en capas `hud_*`)."""
+    from .menuview import scene_menu as _scene          # lazy: menuview importa de aqui
+    return _scene(snap, anim, aspect)
+
+
+SCENES = {"hr": scene_hr, "watts": scene_watts, "gauge": scene_gauge, "pista": scene_pista,
+          "menu": scene_menu}
 
 
 def _plan_window(glfw, want=(1920, 1080)):
@@ -1822,12 +1829,17 @@ def child_main() -> None:
                     glfw.KEY_LEFT: "left", glfw.KEY_RIGHT: "right",
                     glfw.KEY_LEFT_BRACKET: "[", glfw.KEY_RIGHT_BRACKET: "]",
                     glfw.KEY_MINUS: "-", glfw.KEY_EQUAL: "+",     # `+` es KEY_EQUAL (sin shift)
-                    glfw.KEY_V: "v", glfw.KEY_I: "i"}
+                    glfw.KEY_V: "v", glfw.KEY_I: "i",
+                    glfw.KEY_ENTER: "enter", glfw.KEY_KP_ENTER: "enter",
+                    glfw.KEY_SPACE: "space", glfw.KEY_ESCAPE: "escape"}
         slots: list = []
         # En standalone (`--3d`) no hay TUI: la ventana es la dueña de la vista y del zoom,
         # y solo reenvia al motor lo que afecta a la sesion (q/x/s). `standalone` y
         # `local_views` se comparten entre el loop (que los lee del snapshot) y `on_key`.
         standalone = False
+        # Fase del motor ("menu" antes de Play, "running" despues). En el menu NINGUNA tecla de
+        # vista actua: si lo hiciera, `g` o las flechas se saltarian el Play y empezaria el render.
+        phase = "running"
         local_views: list = []
 
         def set_views(v):
@@ -1843,7 +1855,17 @@ def child_main() -> None:
             hashables para usarlas como clave de dict. Por eso el hit-test compara el `value` y `press`
             se indexa por esa clave.
             """
-            return getattr(win, "value", None) or id(win)
+            v = getattr(win, "value", None)
+            if v:
+                return v
+            try:
+                # glfw-python (>= 2.x en Linux) da `LP__GLFWwindow`, un puntero sin `.value`, y
+                # cada callback recibe un objeto nuevo: `id(win)` nunca coincide y `slot_under`
+                # devolvia None (rueda, orbita, foco y hover no se enteraban). Vale la direccion.
+                import ctypes
+                return ctypes.cast(win, ctypes.c_void_p).value or id(win)
+            except Exception:  # noqa: BLE001 - tipo inesperado: el comportamiento de siempre
+                return id(win)
 
         def same_win(a, b):
             return winkey(a) == winkey(b)
@@ -1911,6 +1933,15 @@ def child_main() -> None:
             que hay que clicar una vez y despues arrastrar. Con el touchpad el arrastre de un dedo
             tambien llega por aqui: el trackpad actua como raton con boton.
             """
+            if phase == "menu":                  # hover: el cursor en fraccion de ventana
+                s = slot_under(win)
+                try:
+                    wpts, hpts = glfw.get_window_size(win)
+                    if s is not None and wpts and hpts:
+                        s[5]["mouse_n"] = (x / float(wpts), 1.0 - y / float(hpts))
+                except Exception:  # noqa: BLE001 - ventana cerrada durante el movimiento
+                    pass
+                return
             p = press.get(winkey(win))
             if p is None:
                 return
@@ -1919,6 +1950,19 @@ def child_main() -> None:
 
         def on_button(win, button, action, _mods):
             """Clic: mantener el boton = arrastre; boton derecho centra la orbita."""
+            if phase == "menu":                  # en el menu el clic izquierdo pulsa el widget
+                if button == glfw.MOUSE_BUTTON_LEFT and action == PRESS:
+                    try:
+                        from .menuview import hit_id
+                        px, py = glfw.get_cursor_pos(win)
+                        wpts, hpts = glfw.get_window_size(win)
+                        wid = hit_id(snap.get("menu"), (px / float(wpts), 1.0 - py / float(hpts)),
+                                     wpts / float(hpts))
+                    except Exception:  # noqa: BLE001 - ventana cerrada durante el clic
+                        wid = None
+                    if wid:
+                        _emit({"ui": {"act": wid}})
+                return
             if action == PRESS:
                 s = slot_under(win)
                 if button == glfw.MOUSE_BUTTON_RIGHT and s is not None:
@@ -1947,6 +1991,12 @@ def child_main() -> None:
                 return
             name = KEYNAMES.get(key)
             if not name:
+                return
+            if phase == "menu":
+                if name in ("enter", "space"):
+                    _emit({"ui": {"act": "play"}})
+                elif name in ("q", "escape"):
+                    _emit({"key": "q"})          # salir del menu sin grabar nada
                 return
             if name == "v":                  # camara de la pista: es estado de la ventana
                 cycle_cam()
@@ -2112,6 +2162,11 @@ def child_main() -> None:
             if got is not None:
                 snap = got
                 standalone = bool(snap.get("standalone"))
+                new_phase = str(snap.get("phase") or "running")
+                if standalone and new_phase != phase:
+                    # menu -> running: la ventana pasa a las vistas que el motor fijo para rodar
+                    local_views[:] = [v for v in (snap.get("views") or []) if v in SCENES]
+                phase = new_phase
                 if standalone and not local_views and snap.get("views"):
                     # Primera linea: la ventana hereda las vistas del motor; a partir de
                     # aqui la ventana las cambia y se las refleja al motor por stdout.

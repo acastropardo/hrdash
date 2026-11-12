@@ -76,6 +76,7 @@ SNAPSHOT_KEYS = {
     "lap_frac": "num",
     "zoom_cmd": "list",
     "cam_cmd": "int",
+    "phase": "str",
     "hud_cmd": "int",
 }
 
@@ -154,7 +155,7 @@ def layers_to_json(layers) -> list:
 
 def build_snapshot(session, config, laps, hr_source, tr_source,
                    view="hr", views=None, zoom_cmd=(0, 0), standalone=False,
-                   cam_cmd=0, hud_cmd=0) -> dict:
+                   cam_cmd=0, hud_cmd=0, phase="running", menu=None) -> dict:
     """Construye el snapshot. Es el unico builder: lo usan la TUI y el motor, para que
     el esquema no se duplique y el harness valide una sola fuente."""
     hr = int(session.current_hr or (getattr(hr_source, "latest_hr", None) or 0))
@@ -198,4 +199,6 @@ def build_snapshot(session, config, laps, hr_source, tr_source,
         "zoom_cmd": list(zoom_cmd),
         "cam_cmd": int(cam_cmd),
         "hud_cmd": int(hud_cmd),
+        "phase": phase,                      # "menu" (antes de Play) o "running"
+        **({"menu": menu} if menu is not None else {}),   # estado del menu: solo en fase menu
     }
