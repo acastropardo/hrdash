@@ -272,10 +272,10 @@ def _upload(ctx, prog, mesh, np, moderngl):
     if getattr(mesh, "fmt", None) == "deck":
         dprog = _deck_prog(ctx)
         if dprog is not None:
-            buf = ctx.buffer(np.asarray(mesh.v or [0.0] * 9, dtype="f4").tobytes())
+            buf = ctx.buffer(np.asarray(mesh.v if len(mesh.v) else [0.0] * 9, dtype="f4").tobytes())
             return ctx.vertex_array(dprog, [(buf, DECK_VATTR, *DECK_FIELDS)]), dprog
         mesh = mesh.to_mesh()
-    buf = ctx.buffer(np.asarray(mesh.v or [0.0] * 10, dtype="f4").tobytes())
+    buf = ctx.buffer(np.asarray(mesh.v if len(mesh.v) else [0.0] * 10, dtype="f4").tobytes())
     return ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)]), prog
 
 
@@ -496,21 +496,6 @@ class Mesh:
             n = [(s1[j] + s2[j]) / 2.0 for j in range(3)]
             self.quad(a1, b1, b2, a2, col, n, light)
 
-    def wheel(self, c, r, fwd, up, lat, col, thick=0.02, segs=16, light=0.0) -> None:
-        """Neumatico como banda cilindrica en el plano (avance, arriba): se lee desde
-        la camara chase (de canto no vale una banda plana) y desde primera persona."""
-        for i in range(segs):
-            a0, a1 = 2 * math.pi * i / segs, 2 * math.pi * (i + 1) / segs
-            def pt(a, o):
-                return (c[0] + (fwd[0] * math.cos(a) + up[0] * math.sin(a)) * r + lat[0] * o,
-                        c[1] + (fwd[1] * math.cos(a) + up[1] * math.sin(a)) * r + lat[1] * o,
-                        c[2] + (fwd[2] * math.cos(a) + up[2] * math.sin(a)) * r + lat[2] * o)
-            n = (fwd[0] * math.cos(a0) + up[0] * math.sin(a0),
-                 fwd[1] * math.cos(a0) + up[1] * math.sin(a0),
-                 fwd[2] * math.cos(a0) + up[2] * math.sin(a0))
-            self.quad(pt(a0, -thick / 2.0), pt(a0, thick / 2.0),
-                      pt(a1, thick / 2.0), pt(a1, -thick / 2.0), col, n, light)
-
     def vtri(self, a, b, c, cols, n, light=0.0) -> None:
         """Triangulo con color por vertice.
 
@@ -546,20 +531,6 @@ class Mesh:
                         c[1] + r * (u[1] * math.cos(a) + v[1] * math.sin(a)),
                         c[2] + r * (u[2] * math.cos(a) + v[2] * math.sin(a)))
             self.tri(c, pt(a0), pt(a1), col, tuple(n), light)
-
-    def spoke(self, c, r, fwd, up, lat, ang, col, w=0.014, light=0.0) -> None:
-        """Radio de rueda en el plano (avance, arriba): sin radios la rueda es un aro negro
-        y desde la camara no se lee que gira."""
-        dirv = [fwd[i] * math.cos(ang) + up[i] * math.sin(ang) for i in range(3)]
-        perp = [dirv[1] * lat[2] - dirv[2] * lat[1], dirv[2] * lat[0] - dirv[0] * lat[2],
-                dirv[0] * lat[1] - dirv[1] * lat[0]]
-        pl = math.sqrt(perp[0] * perp[0] + perp[1] * perp[1] + perp[2] * perp[2]) or 1.0
-        perp = [perp[0] / pl * w / 2.0, perp[1] / pl * w / 2.0, perp[2] / pl * w / 2.0]
-        h = [c[i] + dirv[i] * 0.05 for i in range(3)]
-        t = [c[i] + dirv[i] * (r - 0.015) for i in range(3)]
-        self.quad(tuple(h[i] + perp[i] for i in range(3)), tuple(t[i] + perp[i] for i in range(3)),
-                  tuple(t[i] - perp[i] for i in range(3)), tuple(h[i] - perp[i] for i in range(3)),
-                  col, tuple(lat), light)
 
     @property
     def tris(self) -> int:
@@ -882,20 +853,39 @@ def _roof(m, pts, lamps, warm) -> None:
         m.segment((lp[0], lp[1], lp[2] + 0.07), top, 0.02, STEEL, 0.1, sides=4)
 
 
-SKIN = (0.62, 0.49, 0.41)
-FRAME = (0.15, 0.16, 0.19)
-RIM = (0.24, 0.26, 0.30)
-TIRE = (0.12, 0.13, 0.15)
-SHOE = (0.11, 0.12, 0.14)
-HELMET = (0.86, 0.89, 0.93)
-# Proporciones del atleta y la bici en metros (el trazado esta a 1 unidad = 1 m)
-WR, BB_H = 0.34, 0.27                                   # radio de rueda, altura del pedalier
-REAR, FRONT = (-0.53, WR), (0.56, WR)                   # ejes (batalla ~1,09 m)
-HTUBE, BAR = (0.40, 0.70), (0.47, 0.62)                 # direccion y manillar
-HIP, SHO, HEAD = (-0.16, 0.78), (0.08, 1.06), (0.20, 1.22)   # postura inclinada de carrera
-CRANK, THIGH, SHIN = 0.17, 0.43, 0.44
-ARM_U, ARM_F = 0.32, 0.31                 # brazo: hombro->codo y codo->mano
-Q_RIDER = -3.0                          # linea del rider: 3 m dentro del eje de pista
+SKIN = (0.80, 0.62, 0.50)
+SUIT = (0.085, 0.095, 0.120)              # mono de pista (culote y costados)
+SOCK = (0.90, 0.91, 0.93)
+SHOE = (0.07, 0.07, 0.08)
+GLOVE = (0.06, 0.06, 0.07)
+HELMET = (0.90, 0.92, 0.95)
+VISOR = (0.05, 0.07, 0.10)
+FRAME = (0.13, 0.14, 0.17)                # carbono
+CARBON = (0.09, 0.09, 0.11)               # lenticular y perfil de la rueda delantera
+TIRE = (0.05, 0.05, 0.06)
+METAL = (0.55, 0.57, 0.60)                # plato, bielas, bujes
+LOGO = (0.82, 0.84, 0.88)                 # marca en las ruedas: sin ella no se lee que giran
+
+# Geometria en el plano sagital (s = avance, h = altura) en metros, con el pedalier en s = 0.
+# Atleta de ~1,75 m en bici de pista en posicion de persecucion (acoples aero).
+WR, BB_H = 0.335, 0.28                    # rueda 700c con tubular, altura del pedalier
+REAR, FRONT = (-0.39, WR), (0.585, WR)    # vainas cortas: batalla ~0,98 m
+SEAT_A = math.radians(74.0)               # angulo del tubo de sillin
+SEAT_DIR = (-math.cos(SEAT_A), math.sin(SEAT_A))
+CLUSTER = (SEAT_DIR[0] * 0.48, BB_H + SEAT_DIR[1] * 0.48)     # union tubo superior / sillin
+SADDLE = (SEAT_DIR[0] * 0.72, BB_H + SEAT_DIR[1] * 0.72)      # altura de sillin 0,72 m
+HT_TOP, HT_BOT = (0.40, 0.80), (0.445, 0.64)                  # tubo de direccion
+PAD = (0.40, 0.845)                       # apoyabrazos de los acoples
+HIP = (-0.15, 1.02)                       # articulacion de la cadera (sobre el sillin)
+SHO = (0.35, 1.15)                        # hombro: torso de 0,52 m a ~15 grados
+ELBOW = (0.40, 0.875)                     # codo sobre el apoyabrazos
+HAND = (0.64, 0.885)                      # manos en el extremo de los acoples
+HEAD = (0.50, 1.235)                      # centro de la cabeza (la camara POV va aqui)
+CRANK, THIGH, SHIN = 0.165, 0.44, 0.42
+ANKLE = (-0.06, 0.10)                     # tobillo respecto al eje del pedal (pie plano)
+HIP_W, PEDAL_W, SHO_W, ELB_W = 0.09, 0.11, 0.165, 0.085       # separaciones laterales
+Q_RIDER = -3.0                            # linea del rider: 3 m dentro del eje de pista
+BODY_L = 0.12                             # emisivo leve: el cuerpo no se hunde en negro de canto
 
 
 def _knee(H, F, L1, L2, bend=1.0):
@@ -917,74 +907,262 @@ def _knee(H, F, L1, L2, bend=1.0):
     return (H[0] + L1 * (ca * us - bend * sa * uh), H[1] + L1 * (bend * sa * us + ca * uh))
 
 
+class ArrMesh:
+    """Malla ya empaquetada como array de numpy (N x 10, formato `VATTR`).
 
-def _rider(m, base, fwd, up, lat, theta, roll, kit, pov=False) -> None:
-    """Bici + atleta: cuadro, aros con radios, pedalada, brazos con codo y casco.
-
-    El marco local es (avance, altura, lateral) apoyado en la superficie peraltada.
-    En primera persona (`pov`) solo se dibuja la bici, el pedal y las manos: el cuerpo
-    quedaria entre la camara (en el casco) y el cuadro.
-
-    `theta` es el angulo de la biela y `roll` el de la rueda (rodar = distancia / radio):
-    los radios giran a la velocidad real y se paran cuando se para el rider, igual que la
-    pedalada. Las secciones de 6 caras son lo que hace que un brazo se lea como volumen y
-    no como una tarjeta plana.
+    El ciclista se arma con numpy en coordenadas locales y se transforma de una vez: con
+    sombreado suave y articulaciones son ~3-4k triangulos, que en listas de Python por
+    frame no caben en el presupuesto de 20 ms.
     """
-    def P(s, h, w=0.0):
-        return (base[0] + fwd[0] * s + up[0] * h + lat[0] * w,
-                base[1] + fwd[1] * s + up[1] * h + lat[1] * w,
-                base[2] + fwd[2] * s + up[2] * h + lat[2] * w)
 
-    saddle = (HIP[0], HIP[1] + 0.05)
+    __slots__ = ("v",)
 
-    # Sombra de contacto: parches bajo las dos ruedas y bajo el rider. Sin anclaje al suelo
-    # la bici flota y el cuadro parece de juguete; un disco grande se lee como una mancha.
+    def __init__(self, arr):
+        self.v = arr.reshape(-1)
+
+    @property
+    def tris(self) -> int:
+        return len(self.v) // 30
+
+
+# --- Primitivas en coordenadas locales (s, h, w) con normales por vertice -----------------
+
+def _pack(np, P, N, col, light):
+    """Triangulos (T, 3, 3) de posiciones y normales -> filas `VATTR`."""
+    out = np.empty((P.shape[0] * 3, 10), dtype="f4")
+    out[:, 0:3] = P.reshape(-1, 3)
+    out[:, 3:6] = N.reshape(-1, 3)
+    out[:, 6:9] = col
+    out[:, 9] = light
+    return out
+
+
+def _grid(np, P, N, col, light):
+    """Rejilla (U+1, V+1) de vertices -> dos triangulos por celda."""
+    a, b = P[:-1, :-1], P[:-1, 1:]
+    c, d = P[1:, 1:], P[1:, :-1]
+    na, nb, nc, nd = N[:-1, :-1], N[:-1, 1:], N[1:, 1:], N[1:, :-1]
+    T = np.concatenate([np.stack([a, b, c], 2).reshape(-1, 3, 3),
+                        np.stack([a, c, d], 2).reshape(-1, 3, 3)])
+    TN = np.concatenate([np.stack([na, nb, nc], 2).reshape(-1, 3, 3),
+                         np.stack([na, nc, nd], 2).reshape(-1, 3, 3)])
+    return _pack(np, T, TN, col, light)
+
+
+def _basis(np, d):
+    d = d / (np.linalg.norm(d) or 1.0)
+    ref = np.array([0.0, 0.0, 1.0]) if abs(d[2]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    u = np.cross(d, ref)
+    u /= np.linalg.norm(u)
+    return d, u, np.cross(d, u)
+
+
+def _tube(np, a, b, ra, rb, col, sides=10, light=BODY_L):
+    """Tronco de cono a->b con radios ra->rb: miembro (con su conicidad) o tubo del cuadro."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    L = float(np.linalg.norm(b - a)) or 1e-6
+    d, u, v = _basis(np, b - a)
+    ang = np.linspace(0.0, 2 * math.pi, sides + 1)
+    ring = np.cos(ang)[:, None] * u + np.sin(ang)[:, None] * v
+    n = ring + d * (ra - rb) / L
+    n /= np.linalg.norm(n, axis=1)[:, None]
+    P = np.stack([a + ra * ring, b + rb * ring])
+    return _grid(np, P, np.stack([n, n]), col, light)
+
+
+def _ellipsoid(np, c, e0, r, col, nu=7, nv=12, e1=None, light=BODY_L):
+    """Elipsoide de semiejes `r` sobre la base (e0, e1, e2); e0 es el eje largo. Torso,
+    pelvis, cabeza, casco, zapatillas y palos de la rueda delantera."""
+    c = np.asarray(c, float)
+    e0 = np.asarray(e0, float)
+    e0 = e0 / np.linalg.norm(e0)
+    if e1 is None:
+        _d, e1, e2 = _basis(np, e0)
+    else:
+        e1 = np.asarray(e1, float)
+        e1 = e1 - e0 * float(e1 @ e0)
+        e1 /= np.linalg.norm(e1)
+        e2 = np.cross(e0, e1)
+    th = np.linspace(0.0, math.pi, nu + 1)[:, None, None]
+    ph = np.linspace(0.0, 2 * math.pi, nv + 1)[None, :, None]
+    ct, st, cp, sp = np.cos(th), np.sin(th), np.cos(ph), np.sin(ph)
+    P = c + r[0] * ct * e0 + r[1] * st * cp * e1 + r[2] * st * sp * e2
+    N = ct / r[0] * e0 + st * cp / r[1] * e1 + st * sp / r[2] * e2
+    N = N / np.linalg.norm(N, axis=2)[..., None]
+    return _grid(np, P, N, col, light)
+
+
+def _sphere(np, c, r, col, light=BODY_L):
+    return _ellipsoid(np, c, (1.0, 0.0, 0.0), (r, r, r), col, 5, 9, light=light)
+
+
+def _torus(np, c, R, r, col, segs=28, sides=6, light=0.08):
+    """Neumatico: toro en el plano (s, h) alrededor del eje lateral."""
+    a = np.linspace(0.0, 2 * math.pi, segs + 1)[:, None, None]
+    b = np.linspace(0.0, 2 * math.pi, sides + 1)[None, :, None]
+    radial = np.concatenate([np.cos(a), np.sin(a), np.zeros_like(a)], 2)
+    lat = np.array([0.0, 0.0, 1.0])
+    N = np.cos(b) * radial + np.sin(b) * lat
+    P = np.asarray(c, float) + R * radial + r * N
+    return _grid(np, P, np.broadcast_to(N, P.shape), col, light)
+
+
+def _disc(np, c, r0, r1, w, col, segs=28, light=0.10):
+    """Corona plana (r0..r1) en el plano de la rueda, a `w` del centro, mirando hacia fuera.
+    r0 = 0 da un disco: la cara de la lenticular."""
+    a = np.linspace(0.0, 2 * math.pi, segs + 1)
+    radial = np.stack([np.cos(a), np.sin(a), np.zeros_like(a)], 1)
+    off = np.array([0.0, 0.0, w])
+    P = np.stack([np.asarray(c, float) + off + r0 * radial, np.asarray(c, float) + off + r1 * radial])
+    n = np.array([0.0, 0.0, 1.0 if w >= 0 else -1.0])
+    return _grid(np, P, np.broadcast_to(n, P.shape), col, light)
+
+
+def _p(s, h, w=0.0):
+    return (s, h, w)
+
+
+def _rider_static(np, kit, pov):
+    """Piezas rigidas del conjunto, en coordenadas locales: se arman una vez por color de zona.
+
+    Cuadro, ruedas (lo que tiene simetria de giro), sillin, acoples y, salvo en primera
+    persona, torso, brazos (fijos en los acoples), cuello, cabeza y casco.
+    """
+    parts = []
+    T = lambda a, b, r, rb=None, col=FRAME, sides=8: parts.append(  # noqa: E731
+        _tube(np, a, b, r, r if rb is None else rb, col, sides, 0.10))
+    bb = _p(0.0, BB_H)
+    # Cuadro: perfiles gruesos de carbono (diagonal y direccion), vainas y tirantes finos.
+    T(bb, _p(*HT_BOT), 0.026)                                   # diagonal
+    T(bb, _p(*CLUSTER), 0.021)                                  # tubo de sillin
+    T(_p(*CLUSTER), _p(*HT_TOP), 0.018)                         # tubo superior
+    T(_p(*HT_BOT), _p(*HT_TOP), 0.024)                          # direccion
+    for w in (-0.055, 0.055):
+        T(_p(0.0, BB_H, w * 0.6), _p(REAR[0], REAR[1], w), 0.011)          # vainas
+        T(_p(CLUSTER[0], CLUSTER[1], w * 0.3), _p(REAR[0], REAR[1], w), 0.010)  # tirantes
+        T(_p(HT_BOT[0], HT_BOT[1], w * 0.5), _p(FRONT[0], FRONT[1], w), 0.013)  # horquilla
+    T(_p(*CLUSTER), _p(*SADDLE), 0.013, col=CARBON)             # tija
+    parts.append(_ellipsoid(np, _p(SADDLE[0] + 0.02, SADDLE[1] + 0.01), (1, 0.05, 0),
+                            (0.135, 0.018, 0.055), SUIT, 4, 10, light=0.10))       # sillin
+    # Potencia, manillar base y acoples con sus apoyabrazos.
+    T(_p(*HT_TOP), _p(0.47, 0.79), 0.016)
+    T(_p(0.47, 0.79, -0.19), _p(0.47, 0.79, 0.19), 0.012, sides=6)
+    for w in (-1.0, 1.0):
+        T(_p(0.42, 0.83, 0.045 * w), _p(HAND[0] + 0.03, 0.865, 0.045 * w), 0.011, sides=6)
+        T(_p(0.45, 0.79, 0.07 * w), _p(PAD[0], PAD[1] - 0.012, 0.07 * w), 0.010, sides=6)
+        parts.append(_ellipsoid(np, _p(PAD[0], PAD[1], ELB_W * w), (1, 0, 0),
+                                (0.06, 0.012, 0.035), SUIT, 3, 8, light=0.10))
+    # Ruedas: tubular, lenticular trasera y perfil alto delantero (las caras son planas y
+    # simetricas, asi que no giran; el giro lo cuentan la marca y los palos).
     for c in (REAR, FRONT):
-        m.plate(P(c[0], 0.006), 0.13, tuple(up), SHADOW, 10, 0.0)
-    m.plate((base[0], base[1], base[2] + 0.006), 0.19, tuple(up), SHADOW, 10, 0.0)
+        parts.append(_torus(np, _p(*c), WR - 0.012, 0.012, TIRE))
+        parts.append(_tube(np, _p(c[0], c[1], -0.05), _p(c[0], c[1], 0.05), 0.016, 0.016, METAL, 8, 0.15))
+    for w in (-0.016, 0.016):
+        parts.append(_disc(np, _p(*REAR), 0.0, WR - 0.022, w, CARBON))
+        parts.append(_disc(np, _p(*FRONT), WR - 0.085, WR - 0.022, w * 0.8, CARBON))
+    # Plato (lado de la transmision) y su eje.
+    parts.append(_disc(np, bb, 0.0, 0.11, 0.045, METAL, 24, 0.15))
+    parts.append(_disc(np, bb, 0.0, 0.11, 0.040, METAL, 24, 0.15))
+    T(_p(0.0, BB_H, -0.06), _p(0.0, BB_H, 0.06), 0.02, col=METAL)
 
-    for a, b, r in (((0.0, BB_H), saddle, 0.018), ((0.0, BB_H), HTUBE, 0.022),
-                    (saddle, HTUBE, 0.015), (HTUBE, FRONT, 0.017),
-                    ((0.0, BB_H), REAR, 0.015), (saddle, REAR, 0.012),
-                    (HTUBE, BAR, 0.017)):
-        m.segment(P(a[0], a[1]), P(b[0], b[1]), r, FRAME, 0.15, sides=6)
-    m.plate(P(saddle[0], saddle[1]), 0.10, tuple(up), FRAME, 8, 0.15)          # sillin
-    m.plate(P(0.0, BB_H), 0.115, tuple(lat), RIM, 12, 0.15)                   # plato
+    for w in (-1.0, 1.0):                                       # antebrazos y manos (POV incluido)
+        el, hd = _p(ELBOW[0], ELBOW[1], ELB_W * w), _p(HAND[0], HAND[1], 0.055 * w)
+        parts.append(_tube(np, el, hd, 0.040, 0.031, SKIN))
+        parts.append(_sphere(np, el, 0.041, SKIN))
+        parts.append(_ellipsoid(np, hd, (1, 0.1, 0), (0.055, 0.035, 0.03), GLOVE, 4, 8))
+    if not pov:
+        hip, sho = np.array(_p(*HIP)), np.array(_p(*SHO))
+        axis = sho - hip
+        # Torso: pecho ancho y abdomen mas estrecho (un solo elipsoide sale como un huevo).
+        parts.append(_ellipsoid(np, hip + axis * 0.68, axis, (0.20, 0.12, 0.185), kit, e1=(0, 1, 0)))
+        parts.append(_ellipsoid(np, hip + axis * 0.30, axis, (0.21, 0.115, 0.15), kit, e1=(0, 1, 0)))
+        parts.append(_ellipsoid(np, hip + np.array([0.0, -0.02, 0.0]), (1, -0.2, 0),
+                                (0.13, 0.10, 0.155), SUIT))                         # pelvis
+        for w in (-1.0, 1.0):                                    # brazos: manga del color de zona
+            sh, el = _p(SHO[0], SHO[1], SHO_W * w), _p(ELBOW[0], ELBOW[1], ELB_W * w)
+            parts.append(_sphere(np, sh, 0.058, kit))
+            parts.append(_tube(np, sh, el, 0.052, 0.042, kit))
+        parts.append(_tube(np, _p(SHO[0] + 0.02, SHO[1] + 0.02), _p(HEAD[0] - 0.05, HEAD[1] - 0.04),
+                           0.052, 0.045, SKIN))                                     # cuello
+        parts.append(_sphere(np, _p(*HEAD), 0.092, SKIN))
+        # Casco de crono en lagrima: de la frente a una cola que baja sobre la espalda.
+        parts.append(_ellipsoid(np, _p(HEAD[0] - 0.07, HEAD[1] + 0.03), (-1, 0.22, 0),
+                                (0.21, 0.105, 0.112), HELMET, 7, 14, e1=(0.22, 1, 0), light=0.16))
+        # Visera: solo la cara frontal; mas ancha que la cabeza asomaba por el costado.
+        parts.append(_ellipsoid(np, _p(HEAD[0] + 0.085, HEAD[1] - 0.01), (0.2, -1, 0),
+                                (0.055, 0.03, 0.078), VISOR, 4, 10, e1=(1, 0.2, 0), light=0.05))
+        parts.append(_ellipsoid(np, _p(HEAD[0] - 0.09, HEAD[1] + 0.13), (-1, 0.22, 0),
+                                (0.13, 0.012, 0.03), kit, 3, 8, e1=(0.22, 1, 0), light=0.3))  # franja
+    return np.concatenate(parts)
 
-    for c in (REAR, FRONT):
-        p = P(c[0], c[1])
-        m.wheel(p, WR, fwd, up, lat, TIRE, 0.05, 18, 0.12)
-        m.wheel(p, WR - 0.030, fwd, up, lat, RIM, 0.012, 18, 0.18)     # llanta: sin ella el aro es solo negro
-        m.plate(p, 0.075, tuple(lat), RIM, 10, 0.2)                            # buje
-        for k in range(6):                                                     # radios
-            m.spoke(p, WR, fwd, up, lat, roll + 2 * math.pi * k / 6.0, RIM, 0.012, 0.14)
 
+_RIDER_CACHE: dict = {}
+
+
+def _rider_local(np, theta, roll, kit, pov):
+    """Conjunto completo en coordenadas locales: lo rigido de la cache + lo que se mueve
+    (piernas, bielas, palos de la delantera y la marca de la lenticular)."""
+    key = (tuple(round(c, 3) for c in kit), pov)
+    static = _RIDER_CACHE.get(key)
+    if static is None:
+        if len(_RIDER_CACHE) > 16:
+            _RIDER_CACHE.clear()
+        static = _RIDER_CACHE[key] = _rider_static(np, kit, pov)
+    parts = [static]
     for side in (1.0, -1.0):
         ph = theta if side > 0 else theta + math.pi
-        foot = (CRANK * math.cos(ph), BB_H + CRANK * math.sin(ph))
-        m.segment(P(0.0, BB_H, 0.06 * side), P(foot[0], foot[1], 0.06 * side), 0.014, RIM, 0.2, sides=6)
-        kn = _knee(HIP, foot, THIGH, SHIN, 1.0)
-        el = _knee(SHO, BAR, ARM_U, ARM_F, -1.0)
-        if not pov:
-            m.segment(P(HIP[0], HIP[1], 0.06 * side), P(kn[0], kn[1], 0.07 * side), 0.075, SKIN, 0.2, sides=6)
-            m.segment(P(kn[0], kn[1], 0.07 * side), P(foot[0], foot[1], 0.075 * side), 0.055, SKIN, 0.2, sides=6)
-            m.segment(P(SHO[0], SHO[1], 0.075 * side), P(el[0], el[1], 0.06 * side), 0.050, SKIN, 0.2, sides=6)
-            m.segment(P(el[0], el[1], 0.06 * side), P(BAR[0], BAR[1], 0.05 * side), 0.042, SKIN, 0.2, sides=6)
-        p = P(foot[0], foot[1], 0.075 * side)
-        m.box(p[0], p[1], p[2], 0.28, 0.11, 0.07, SHOE, 0.0, 0.15)              # zapatilla
-        h = P(BAR[0], BAR[1], 0.05 * side)
-        m.box(h[0], h[1], h[2], 0.11, 0.09, 0.06, SKIN, 0.0, 0.25)              # mano en el manillar
-    if not pov:
-        mid = ((HIP[0] + SHO[0]) / 2.0, (HIP[1] + SHO[1]) / 2.0)
-        m.segment(P(HIP[0], HIP[1]), P(mid[0], mid[1]), 0.105, kit, 0.35, sides=6)     # cadera
-        m.segment(P(mid[0], mid[1]), P(SHO[0], SHO[1]), 0.095, kit, 0.35, sides=6)     # espalda
-        # Hombros y cadera en cruz: sin ese ancho el atleta es una linea y de canto se lee
-        # como una tarjeta, que era el problema del placeholder.
-        m.segment(P(SHO[0], SHO[1], 0.075), P(SHO[0], SHO[1], -0.075), 0.055, kit, 0.30, sides=6)
-        m.segment(P(HIP[0], HIP[1], 0.06), P(HIP[0], HIP[1], -0.06), 0.075, kit, 0.30, sides=6)
-        m.segment(P(SHO[0], SHO[1]), P(HEAD[0] - 0.06, HEAD[1] - 0.04), 0.050, SKIN, 0.25, sides=6)
-        m.segment(P(HEAD[0] - 0.08, HEAD[1] - 0.05), P(HEAD[0] + 0.12, HEAD[1] + 0.03),
-                  0.108, HELMET, 0.30, sides=6)                                       # casco aerodinamico
+        pedal = (CRANK * math.cos(ph), BB_H + CRANK * math.sin(ph))
+        parts.append(_tube(np, _p(0.0, BB_H, 0.06 * side), _p(pedal[0], pedal[1], 0.085 * side),
+                           0.012, 0.010, METAL, 6, 0.15))                            # biela
+        # Tobillo: el talon baja en la fase de empuje y sube en la de recobro (+-9 grados).
+        a = 0.16 * math.sin(ph)
+        ca, sa = math.cos(a), math.sin(a)
+        ank = (pedal[0] + ANKLE[0] * ca - ANKLE[1] * sa, pedal[1] + ANKLE[0] * sa + ANKLE[1] * ca)
+        toe = (pedal[0] + 0.10 * ca + 0.01 * sa, pedal[1] + 0.10 * sa - 0.01 * ca)
+        heel = (ank[0] - 0.05 * ca + 0.04 * sa, ank[1] - 0.05 * sa - 0.04 * ca)
+        w_p = PEDAL_W * side
+        mid = ((heel[0] + toe[0]) / 2.0, (heel[1] + toe[1]) / 2.0 + 0.01)
+        L = math.hypot(toe[0] - heel[0], toe[1] - heel[1])
+        parts.append(_ellipsoid(np, _p(mid[0], mid[1], w_p), (toe[0] - heel[0], toe[1] - heel[1], 0),
+                                (L / 2.0 + 0.02, 0.045, 0.045), SHOE, 4, 10, e1=(0, 1, 0)))
+        if pov:
+            continue
+        kn = _knee(HIP, ank, THIGH, SHIN, 1.0)
+        hip, knee, ankle = _p(HIP[0], HIP[1], HIP_W * side), _p(kn[0], kn[1], 0.10 * side), _p(ank[0], ank[1], w_p)
+        parts.append(_tube(np, hip, knee, 0.082, 0.058, SUIT))                       # muslo (culote)
+        parts.append(_sphere(np, knee, 0.058, SUIT))
+        sock = tuple(ankle[j] + (knee[j] - ankle[j]) * 0.20 for j in range(3))
+        parts.append(_tube(np, knee, sock, 0.055, 0.040, SKIN))                      # gemelo
+        parts.append(_tube(np, sock, ankle, 0.041, 0.036, SOCK))
+        parts.append(_sphere(np, ankle, 0.037, SOCK))
+    for k in range(3):                                           # palos de la delantera
+        a = roll + 2 * math.pi * k / 3.0
+        d = (math.cos(a), math.sin(a), 0.0)
+        c = _p(FRONT[0] + d[0] * 0.15, FRONT[1] + d[1] * 0.15)
+        parts.append(_ellipsoid(np, c, d, (0.14, 0.024, 0.011), CARBON, 3, 8, e1=(-d[1], d[0], 0), light=0.10))
+    for k in range(2):                                           # marca de la lenticular
+        a = roll + math.pi * k
+        d = (math.cos(a), math.sin(a), 0.0)
+        c = _p(REAR[0] + d[0] * 0.22, REAR[1] + d[1] * 0.22)
+        parts.append(_ellipsoid(np, c, (-d[1], d[0], 0), (0.07, 0.018, 0.019), LOGO, 3, 8, e1=d, light=0.25))
+    return np.concatenate(parts)
+
+
+def _rider(base, fwd, up, lat, theta, roll, kit, pov=False) -> "ArrMesh":
+    """Bici de pista + atleta en el marco (avance, altura, lateral) apoyado en el peralte.
+
+    En primera persona (`pov`) solo se ven la bici, los antebrazos y las manos: el resto
+    quedaria entre la camara (en el casco) y el cuadro. `theta` es el angulo de la biela y
+    `roll` el de la rueda (distancia / radio), asi que los palos y la marca de la lenticular
+    se paran cuando se para el rider.
+    """
+    import numpy as np                    # el extra `gl` lo trae; el nucleo no lo necesita
+    loc = _rider_local(np, theta, roll, kit, pov)
+    M = np.array([fwd, up, lat], dtype="f4")                 # filas: ejes s, h, w en el mundo
+    out = loc.copy()
+    out[:, 0:3] = loc[:, 0:3] @ M + np.asarray(base, dtype="f4")
+    out[:, 3:6] = loc[:, 3:6] @ M
+    return ArrMesh(out)
 
 
 def scene_pista(snap, anim, aspect=1.6):
@@ -1064,7 +1242,11 @@ def scene_pista(snap, anim, aspect=1.6):
 
     dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
     pov = dist < 0.5
-    _rider(m, base, fwd, up, lat, anim["crank"], anim["roll"], col, pov=pov)
+    # Sombras de contacto bajo las ruedas y el pedalier: sin anclaje al suelo la bici flota.
+    for c, r in ((REAR, 0.11), (FRONT, 0.11), ((0.0, 0.0), 0.17)):
+        p = tuple(base[j] + fwd[j] * c[0] + up[j] * 0.006 for j in range(3))
+        m.plate(p, r, tuple(up), SHADOW, 12, 0.0)
+    rider = _rider(base, fwd, up, lat, anim["crank"], anim["roll"], col, pov=pov)
 
     # Inercia de la orbita: los eventos de arrastre llegan a 60-120 Hz y el frame va a ~50 fps;
     # sin suavizado el gesto sacude el encuadre. `anim["dt"]` es el paso real del loop.
@@ -1078,7 +1260,9 @@ def scene_pista(snap, anim, aspect=1.6):
         # 1a persona: la camara esta dentro del casco (a la altura de los ojos, no de la
         # cumbrera) y mira unos 31 grados hacia abajo, que es lo que mete manillar y rueda
         # delantera en el cuadro. Con el pitch del chase la bici queda fuera del encuadre.
-        fovy, pitch, eh, s0, ahead = 1.22, 0.55, 1.15, HEAD[0] - 0.05, 3.2
+        # Con el atleta agachado sobre los acoples, las manos quedan ~68 grados por debajo
+        # del ojo: con 0,55 de pitch se salian del cuadro y la POV era solo tablon.
+        fovy, pitch, eh, s0, ahead = 1.22, 0.85, HEAD[1], HEAD[0] + 0.03, 3.2
         # Aqui el arrastre es giro de cabeza: el ojo no se mueve, porque orbitar un ojo apoyado
         # a 0,3 m del casco es un circulo de 12 cm. `tilt` positivo = mirar arriba.
         eye = tuple(base[j] + fwd[j] * s0 + up[j] * eh for j in range(3))
@@ -1107,7 +1291,7 @@ def scene_pista(snap, anim, aspect=1.6):
         gaze = _rot(_rot(tuple(fwd[j] - pitch * up[j] for j in range(3)), up, yaw), pax, tilt)
 
     center = tuple(eye[j] + gaze[j] * ahead for j in range(3))
-    return layers + [("frame", m)], (eye, center, (0.0, 0.0, 1.0), fovy, 300.0)
+    return layers + [("frame", m), ("rider", rider)], (eye, center, (0.0, 0.0, 1.0), fovy, 300.0)
 
 
 def _at(pts, f):

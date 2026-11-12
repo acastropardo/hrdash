@@ -41,7 +41,7 @@ XDG_CONFIG_HOME=/tmp/hrdash_xdg .venv/bin/hrdash --simulate --3d --3d-view gauge
 
 ## Pista deck layer
 
-`scene_pista` returns a `deck` layer (`DeckMesh`, `fmt = "deck"`) with its own vertex
+`scene_pista` returns a `rider` layer (`ArrMesh`: numpy array in `VATTR` format; rigid parts cached per zone colour in local coords, only legs/cranks/wheel marks rebuilt per frame, numpy imported lazily so core install still works) and a `deck` layer (`DeckMesh`, `fmt = "deck"`) with its own vertex
 format (`DECK_VATTR`: position, normal, track coords `(s, q)`, baked lamp warmth) and its own
 program (`DECK_VS` / `_deck_fs()`): planks, joints and the longitudinal painted lines are
 procedural in the fragment shader, filtered with `fwidth`. `_upload()` picks program and

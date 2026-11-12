@@ -151,6 +151,33 @@ Captura lateral: se lee como un muneco de palos, no como un ciclista.
   grande, sin frenos. Las ruedas lenticulares ademas eliminan el serrucho de los radios;
   el giro se lee con un logo/marca en el disco.
 
+**Estado: hecha.**
+
+- Geometria nueva (constantes en `glview.py`): rueda 700c R 0,335, pedalier a 0,28, sillin a
+  0,72 m sobre un tubo de 74 grados (0,97 m del suelo), batalla 0,98 m, acoples aero;
+  cadera (-0,15, 1,02), torso de 0,52 m a ~15 grados, codo sobre el apoyabrazos, cabeza
+  adelantada. Rodilla entre 69 y 139 grados en todo el ciclo (real ~70 / ~145), nunca por
+  encima de la cadera ni con la pierna bloqueada; tobillo con +-9 grados segun la fase.
+- Primitivas con normales por vertice en numpy (`_tube` con conicidad, `_ellipsoid`,
+  `_sphere`, `_torus`, `_disc`), en coordenadas locales (s, h, w). Las piezas rigidas
+  (cuadro, ruedas, acoples, torso, brazos, casco) se cachean por color de zona
+  (`_rider_static`); por frame solo piernas, bielas, palos y marca de la lenticular, y todo
+  se transforma con una multiplicacion de matrices. Resultado: `ArrMesh` en la capa
+  `rider`. 3,9k tris en 2,7 ms/frame (POV: 2,2k en 1,3 ms). numpy se importa dentro de
+  `_rider` para que el nucleo siga sin dependencias GL.
+- Equipacion: torso y mangas del color de zona, culote y pelvis oscuros hasta la rodilla,
+  gemelo y antebrazo de piel, calcetin blanco, zapatilla y guantes negros, casco de crono
+  en lagrima blanco con visera y franja del color de zona.
+- Bici de pista: lenticular trasera con marca que gira, delantera de 3 palos, tubulares,
+  plato, bielas, acoples con apoyabrazos, sin frenos.
+- POV: la camara va en `HEAD` y el pitch sube de 0,55 a 0,85; con el atleta agachado las
+  manos quedaban fuera del cuadro.
+- Fuera: `Mesh.wheel`, `Mesh.spoke` y las constantes del muneco anterior.
+- `proto.layers_to_json` convierte arrays de numpy a listas (JSON no serializa float32).
+- Verificado: capturas (chase recta y curva, lateral lejana y cercana, tres cuartos de
+  frente, POV), checks de cinematica de arriba, ventana GLFW real sin `err` a ~25 fps con
+  llvmpipe, capas serializables a JSON, smoke FIT OK.
+
 ### Fase 4 - movimiento creible
 
 - Linea de rodadura sobre la negra (~0,5 m del borde), que es la de un esfuerzo en solitario.
