@@ -102,12 +102,24 @@ is `LP__GLFWwindow` with no `.value`, and `id(win)` differs per callback, which 
 (`libXtst`) under Xvfb: real keys and pointer events, no `xdotool` needed. A background `&`
 process in a non-interactive script ignores SIGINT: close the app with `q`, not `kill -INT`.
 
+## Session setup (phase 3)
+
+The menu has two pages (`menu["page"]`, owned by the engine: `page:sensores|sesion` acts; keys `1`/`2`).
+The chosen session is a `workouts.SessionSpec` (config key `session`, replacing the old unused
+`workout` key): free minutes, a preset id, or a `CustomSpec` (warm, reps x work/rest, cool). The menu
+only sends actions; `workouts.apply_act(spec, act)` is the one pure place that edits it and it must
+never return an out-of-range spec (ladders for durations, 6 h cap) — keep it that way and run it
+through the random-walk check. `Engine.begin()` builds `workout = spec.build()` (None = free without
+limit); phase 4 will follow it live. Menu steppers are widgets with `kind="stepper"`: the action is
+`id:+` or `id:-` (side of the click via `hit_act`, Left/Right via `activate(..., step)`). Focus
+defaults to INICIAR, else the first non-tab widget (tabs come first in focus order).
+
 ## Workout plans
 
 `workouts.py` is the pure model for the pre-session menu feature (plan:
 `docs/plans/menu-entrenamiento.md`): `Block`/`Repeat` -> `Workout`, `at(t)` for "which block am I
-in", `resolve_target` (power if present, else HR, else stopwatch only), presets, and
-`to_dict`/`to_toml_inline` for `config.toml` and the window protocol. No UI/BLE imports; keep it
+in", `resolve_target` (power if present, else HR, else stopwatch only), presets, `SessionSpec`
+(what the menu edits and `config.toml` stores) and `to_dict`/`to_toml_inline` for serialising. No UI/BLE imports; keep it
 that way so it stays checkable headless. `Repeat.between` goes *between* repetitions, not after
 the last one.
 

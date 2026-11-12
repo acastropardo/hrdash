@@ -35,7 +35,7 @@ class Config:
     last_device: str | None = None  # nombre o direccion de la ultima banda
     last_trainer: str | None = None  # nombre o direccion del ultimo rodillo
     use_trainer: bool = True         # False: el usuario eligio "sin rodillo" en el menu
-    workout: workouts.Workout | None = None   # ultimo plan por bloques/intervalos (None = libre)
+    session: workouts.SessionSpec = field(default_factory=workouts.SessionSpec)   # ultima sesion elegida
 
     def computed_hrmax(self) -> int:
         return self.hrmax if self.hrmax else default_hrmax(self.age)
@@ -60,11 +60,11 @@ def load_config() -> Config:
                   "export_fit", "export_csv", "last_device", "last_trainer", "use_trainer"):
             if k in data:
                 setattr(cfg, k, data[k])
-        if "workout" in data:
+        if "session" in data:
             try:
-                cfg.workout = workouts.from_dict(data["workout"])
-            except Exception:  # noqa: BLE001 - un plan roto no debe impedir arrancar
-                cfg.workout = None
+                cfg.session = workouts.spec_from_dict(data["session"])
+            except Exception:  # noqa: BLE001 - una sesion rota no debe impedir arrancar
+                cfg.session = workouts.SessionSpec()
         if "zone_pcts" in data and len(data["zone_pcts"]) == 5:
             cfg.zone_pcts = [list(p) + [None] * (2 - len(p)) for p in data["zone_pcts"]]
     return cfg
@@ -97,8 +97,8 @@ def save_config(cfg: Config) -> None:
         lines.append(f'last_trainer = "{cfg.last_trainer}"')
     if not cfg.use_trainer:
         lines.append("use_trainer = false")
-    if cfg.workout is not None:
-        lines.append("workout = " + workouts.to_toml_inline(workouts.to_dict(cfg.workout)))
+    if cfg.session != workouts.SessionSpec():
+        lines.append("session = " + workouts.to_toml_inline(workouts.spec_to_dict(cfg.session)))
     CONFIG_PATH.write_text("\n".join(lines) + "\n")
 
 

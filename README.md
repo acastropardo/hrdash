@@ -55,7 +55,15 @@ flechas/Tab y Enter, o con el raton, se asigna cada uno (una banda va a FC, un r
 QUITAR deja la sesion sin rodillo, y la fila SIMULADOR permite probar sin hardware. Las fuentes
 muestran su valor en vivo, pero **no se graba nada hasta pulsar INICIAR** (clic, Enter o Espacio;
 hace falta una FC en vivo; `q` o Esc salen sin grabar). Lo elegido se recuerda para la proxima vez.
-Con `--now` se salta el menu. Una vez iniciado, el motor muestrea y graba igual,
+Con `--now` se salta el menu.
+
+La pestana **SESION** (tecla `2`; `1` vuelve a SENSORES) elige que vas a hacer: **libre** (minutos con
+`<` `>`, atajos 15/30/45/60/90 o sin limite), uno de los **presets** (calentamiento 15', resistencia 30',
+sweet spot 45', noruego 4x4, VO2max 5x3, 30/30, Tabata 20/10, umbral 2x20) o una sesion
+**personalizada**: calentar, N series de esfuerzo y pausa (duracion y nivel de cada uno) y enfriar. Se ve el
+perfil de bloques y la duracion total, los valores se ajustan con Izquierda/Derecha o con el clic a cada
+lado, y la ultima eleccion se recuerda. (De momento la sesion solo elige y guarda el plan; seguirlo en vivo
+llega en la siguiente fase.) Una vez iniciado, el motor muestrea y graba igual,
 la terminal solo muestra una linea de estado y el resumen al salir (`q` en la ventana o
 Ctrl+C en la terminal graban FIT + CSV). Tras el menu arranca en los tacometros; dentro de la ventana
 `←`/`→` rotan entre vistas (FC → watts → tacometros → pista) y `h`/`w`/`g`/`p` saltan a

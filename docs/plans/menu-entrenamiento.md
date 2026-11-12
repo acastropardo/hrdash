@@ -126,7 +126,8 @@ scripts, `--simulate` y pruebas); `--duration` y `--ascii` no cambian.
    fase 1".
 2. **Sensores**: escaneo, lista, asignacion, conexion y valores en vivo, persistencia. **Hecha**,
    ver "Estado de la fase 2".
-3. **Sesion**: minutos, presets y editor de intervalos en el menu.
+3. **Sesion**: minutos, presets y editor de intervalos en el menu. **Hecha**, ver "Estado de la
+   fase 3".
 4. **Plan en ejecucion**: runner, tira de bloque en el HUD, arco objetivo en los diales,
    avisos; columna `bloque` en el CSV.
 5. **Export y pulido**: un `lap` por bloque en el FIT (`validate_fit` sigue pasando), resumen
@@ -293,4 +294,54 @@ Menu con lista de dispositivos, asignacion de banda y rodillo, valores en vivo y
   servicio conocido (no hay "mostrar todos"); la lista no desplaza (7 dispositivos); sin Bluetooth
   real no se pudo probar la conexion de verdad (solo escaneo y fuentes falsas); y en macOS, el clic
   con la ventana recien abierta y el tamano con HiDPI siguen por confirmar.
+
+## Estado de la fase 3 (hecha)
+
+El menu elige la sesion: minutos, un preset o intervalos propios. Esta fase **elige, valida y guarda**
+el plan; que la sesion lo siga en vivo (tira de bloque, arco objetivo, avisos) es la fase 4.
+
+- **Modelo** (`workouts.py`): `SessionSpec(kind, minutes, preset, custom)` y `CustomSpec(warm, reps,
+  work_s, rest_s, cool, work, rest)`, pequenas, inmutables y hashables. `build()` da el `Workout` de
+  siempre (o `None` si es libre y sin limite: solo cronometro, que es lo que hacia la app antes y es
+  el valor por defecto). `apply_act(spec, accion)` es una funcion pura que aplica una accion del menu
+  (`kind:...`, `min:set:N`, `min1:+-`, `min5:+-`, `cu:<campo>:+-`) y nunca devuelve un estado fuera
+  de rango: las duraciones salen de una escalera (5 s, 10 s ... 20 min; `+`/`-` salta al siguiente
+  valor aunque el actual no este en ella), los niveles dan la vuelta, y un plan que pasaria de 6 h
+  se rechaza. Ayudas para dibujar: `intensity`/`band` (colorean el perfil por %FTP; los bloques
+  solo por FC se convierten con una tabla aproximada), `profile` y `describe` (lineas cortas en
+  ASCII; las largas usan nombres de nivel en vez de porcentajes).
+- **Config**: `session = {...}` (una linea, solo si no es la de por defecto) **reemplaza al campo
+  `workout` de la fase 0**, que nada usaba; una clave `workout` antigua se ignora y desaparece al
+  guardar, y una sesion rota o mal tipada vuelve al valor por defecto sin impedir el arranque.
+- **Motor** (`engine.py`): `spec`, `page` y `workout`. `handle_ui` entiende `page:...` ademas de las
+  acciones de sesion; `begin()` construye el plan elegido; `menu_info` manda `page` y `session`
+  (spec, nombre, duracion, lineas y perfil). `persist_choices` guarda la sesion junto al resto.
+  Al iniciar, la terminal imprime `plan: ...` en el resumen.
+- **Menu** (`menuview.py`): dos paginas con pestanas (`1` SENSORES, `2` SESION). SESION: lista de
+  tipos (libre, los 8 presets, personalizada) y a la derecha, segun el tipo, minutos (dos steppers
+  de +-1 y +-5, atajos 15/30/45/60/90 y SIN LIMITE), la descripcion del preset, o el editor
+  (calentar, series, fuerte, nivel, suave, nivel, enfriar), mas la duracion total y el perfil de
+  bloques (barra por bloque: ancho = duracion, alto y color = intensidad). Un STEPPER se ajusta con
+  Izquierda/Derecha estando enfocado o con el clic a cada lado del valor (`hit_act`); Enter suma.
+  Sin FC, el foco por defecto es lo primero util de la pagina (BUSCAR, o el primer tipo) y no una
+  pestana.
+- **Ventana** (`glview.py`): teclas `1`, `2`, `left` y `right` (estas dos solo en el menu); los
+  clics mandan la accion completa, con el lado en los steppers.
+- **Harnesses** (fuera del repo): `spec_check.py` (30.000 acciones aleatorias, un 15 % basura, sin un
+  estado invalido ni una excepcion; escaleras con valores fuera de ella, tope de 6 h, 25 formas de
+  `spec_from_dict` rechazadas con solo `ValueError`, ida y vuelta TOML de 300 specs y del
+  `config.toml` real incluido el caso de una clave `workout` antigua); `menu_audit2.py` (3.416
+  widgets en 8 formas de ventana, 2 paginas y 13 sesiones: dentro de pantalla, sin solapes, clic a
+  cada lado de cada stepper, foco que recorre todo, y que ningun texto se corte ni pise las flechas,
+  incluidos los 8 presets y los valores extremos); `engine_check.py` y `menu_audit.py` actualizados;
+  y el recorrido real con XTest (`phase3_drive.sh`): pagina 2, preset por clic, personalizada con
+  Izquierda/Derecha y clics a cada lado, libre con atajo y steppers, 30/30; la configuracion
+  guardada coincide campo a campo con lo hecho, reaparece al reabrir y el resumen imprime el plan.
+  Los escenarios de las fases 1 y 2 se repiten sin cambios (esa repeticion encontro el foco por
+  defecto detras de las pestanas).
+- No hecho / limites: el plan aun no se sigue en vivo ni se exporta (fase 4/5); los presets no son
+  editables (se copian a "personalizada" a mano); el editor no hace series con varios niveles
+  (calentar, N x fuerte/suave, enfriar); las pausas entre series largas del 30/30 no se pueden
+  construir en el editor; y en macOS siguen por confirmar el clic con la ventana recien abierta y el
+  tamano con HiDPI.
 

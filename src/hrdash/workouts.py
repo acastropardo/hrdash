@@ -17,7 +17,7 @@ porque la FC va 1-2 minutos por detras.
 from __future__ import annotations
 
 from bisect import bisect_right
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 KINDS = ("warmup", "work", "rest", "cooldown", "free")
 KIND_LABELS = {"warmup": "Calentamiento", "work": "Trabajo", "rest": "Recuperacion",
@@ -426,3 +426,225 @@ def to_toml_inline(obj) -> str:
         return "{ " + ", ".join(f"{_toml_key(k)} = {to_toml_inline(v)}"
                                 for k, v in obj.items() if v is not None) + " }"
     raise TypeError(f"no serializable a TOML: {type(obj).__name__}")
+
+
+# ================================================================== sesion del menu
+# Lo que el usuario elige antes de iniciar: sesion libre con minutos, un preset o una sesion
+# personalizada (calentar + N x (fuerte / suave) + enfriar). Es una especificacion pequena y
+# hashable: se guarda en `config.toml` (`session = {...}`), la edita el menu con `apply_act` (una
+# funcion pura de (spec, accion) -> spec) y `build()` la convierte en el `Workout` de siempre.
+
+MAX_MIN = 300                                   # tope de una sesion libre
+WORK_LEVELS = ("endurance", "tempo", "sweetspot", "threshold", "vo2", "max")
+REST_LEVELS = ("recovery", "endurance")
+LEVEL_NAMES = {"recovery": "RECUPERACION", "endurance": "RESISTENCIA", "tempo": "TEMPO",
+               "sweetspot": "SWEET SPOT", "threshold": "UMBRAL", "vo2": "VO2MAX", "max": "MAXIMO"}
+# Escalera de duraciones de trabajo/pausa: pasos pequenos donde importa (Tabata 20"/10", 30/30) y
+# grandes cuando la duracion ya es larga. `+`/`-` salta al siguiente valor aunque el actual no
+# este en la escalera (p. ej. uno escrito a mano en config.toml).
+SECS_LADDER = (5, 10, 15, 20, 30, 40, 45, 60, 75, 90, 120, 150, 180, 240, 300, 360, 420, 480,
+               540, 600, 720, 900, 1200)
+WARM_MAX, COOL_MAX, REPS_MAX = 30, 30, 30
+
+
+@dataclass(frozen=True)
+class CustomSpec:
+    warm: int = 10                  # minutos de calentamiento (0 = sin)
+    reps: int = 5                   # repeticiones de fuerte/suave
+    work_s: int = 180               # segundos de cada esfuerzo
+    rest_s: int = 120               # segundos de pausa ENTRE esfuerzos (0 = sin pausa)
+    cool: int = 5                   # minutos de enfriamiento (0 = sin)
+    work: str = "vo2"               # nivel del esfuerzo (WORK_LEVELS)
+    rest: str = "recovery"          # nivel de la pausa (REST_LEVELS)
+
+    def total_s(self) -> int:
+        return self.warm * 60 + self.reps * self.work_s + (self.reps - 1) * self.rest_s + self.cool * 60
+
+
+@dataclass(frozen=True)
+class SessionSpec:
+    kind: str = "free"              # "free" | "preset" | "custom"
+    minutes: int = 0                # sesion libre; 0 = sin limite
+    preset: str = "noruego"
+    custom: CustomSpec = CustomSpec()
+
+    def build(self) -> Workout | None:
+        """El plan a seguir, o None si la sesion es libre y sin limite (solo cronometro)."""
+        if self.kind == "free":
+            return free(self.minutes) if self.minutes > 0 else None
+        if self.kind == "preset":
+            return PRESETS[self.preset]
+        c = self.custom
+        return custom(c.warm, c.reps, c.work_s, c.rest_s, c.cool, c.work, c.rest)
+
+    def summary(self) -> str:
+        """Una linea para el menu: "NORUEGO 4X4 - 40 MIN"."""
+        if self.kind == "free":
+            return "LIBRE - " + (fmt_total(self.minutes * 60) if self.minutes > 0 else "SIN LIMITE")
+        w = self.build()
+        return f"{w.name.upper()} - {fmt_total(w.total_s)}"
+
+
+def fmt_total(secs: int) -> str:
+    """"40 MIN" o "52:30 MIN" si no son minutos justos."""
+    m, s = divmod(int(secs), 60)
+    return f"{m} MIN" if not s else f"{m}:{s:02d} MIN"
+
+
+def fmt_secs(secs: int) -> str:
+    """Duracion de un bloque, corta y en ASCII: 30S, 4', 1'30."""
+    m, s = divmod(int(secs), 60)
+    return f"{s}S" if not m else (f"{m}'" if not s else f"{m}'{s:02d}")
+
+
+def _step(value: int, direction: int, ladder) -> int:
+    """Siguiente valor de la escalera en esa direccion (el mas cercano si `value` no esta)."""
+    vals = sorted(ladder)
+    if direction > 0:
+        return next((v for v in vals if v > value), vals[-1])
+    return next((v for v in reversed(vals) if v < value), vals[0])
+
+
+def _cycle(value: str, direction: int, options) -> str:
+    i = options.index(value) if value in options else 0
+    return options[(i + direction) % len(options)]
+
+
+def apply_act(spec: SessionSpec, act) -> SessionSpec | None:
+    """Spec nueva tras una accion del menu, `spec` si no cambia nada (limites) y None si `act`
+    no es una accion de sesion valida. Acciones: `kind:free|custom|preset:<id>`, `min:set:<n>`,
+    `min1:+|-`, `min5:+|-` y `cu:<campo>:+|-` (warm, reps, work, wlvl, rest, rlvl, cool)."""
+    if not isinstance(act, str):
+        return None
+    p = act.split(":")
+    if p[0] == "kind":
+        if len(p) == 2 and p[1] in ("free", "custom"):
+            return replace(spec, kind=p[1])
+        if len(p) == 3 and p[1] == "preset" and p[2] in PRESETS:
+            return replace(spec, kind="preset", preset=p[2])
+        return None
+    if p[0] == "min" and len(p) == 3 and p[1] == "set":
+        try:
+            n = int(p[2])
+        except ValueError:
+            return None
+        return replace(spec, kind="free", minutes=n) if 0 <= n <= MAX_MIN else None
+    if p[0] in ("min1", "min5") and len(p) == 2 and p[1] in ("+", "-"):
+        d, step = (1 if p[1] == "+" else -1), (1 if p[0] == "min1" else 5)
+        m = 30 if spec.minutes == 0 else max(1, min(MAX_MIN, spec.minutes + d * step))
+        return replace(spec, kind="free", minutes=m)
+    if p[0] == "cu" and len(p) == 3 and p[2] in ("+", "-"):
+        d, c = (1 if p[2] == "+" else -1), spec.custom
+        new = {
+            "warm": lambda: replace(c, warm=max(0, min(WARM_MAX, c.warm + d))),
+            "cool": lambda: replace(c, cool=max(0, min(COOL_MAX, c.cool + d))),
+            "reps": lambda: replace(c, reps=max(1, min(REPS_MAX, c.reps + d))),
+            "work": lambda: replace(c, work_s=_step(c.work_s, d, SECS_LADDER)),
+            "rest": lambda: replace(c, rest_s=_step(c.rest_s, d, (0,) + SECS_LADDER)),
+            "wlvl": lambda: replace(c, work=_cycle(c.work, d, WORK_LEVELS)),
+            "rlvl": lambda: replace(c, rest=_cycle(c.rest, d, REST_LEVELS)),
+        }.get(p[1])
+        if new is None:
+            return None
+        nc = new()
+        return replace(spec, kind="custom", custom=nc) if nc.total_s() <= MAX_TOTAL_S else spec
+    return None
+
+
+def spec_to_dict(s: SessionSpec) -> dict:
+    c = s.custom
+    return {"kind": s.kind, "minutes": s.minutes, "preset": s.preset,
+            "custom": {"warm": c.warm, "reps": c.reps, "work_s": c.work_s, "rest_s": c.rest_s,
+                       "cool": c.cool, "work": c.work, "rest": c.rest}}
+
+
+def spec_from_dict(d) -> SessionSpec:
+    """Spec a partir de `spec_to_dict`. Levanta ValueError si algo no es valido (nunca otra cosa)."""
+    try:
+        c = d.get("custom") or {}
+        cu = CustomSpec(c["warm"], c["reps"], c["work_s"], c["rest_s"], c["cool"], c["work"], c["rest"])
+        s = SessionSpec(d["kind"], d["minutes"], d["preset"], cu)
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError(f"sesion mal formada: {exc}") from exc
+    ints = (s.minutes, cu.warm, cu.reps, cu.work_s, cu.rest_s, cu.cool)
+    if s.kind not in ("free", "preset", "custom") or s.preset not in PRESETS \
+            or cu.work not in WORK_LEVELS or cu.rest not in REST_LEVELS \
+            or not all(isinstance(v, int) and not isinstance(v, bool) for v in ints) \
+            or not (0 <= s.minutes <= MAX_MIN and 0 <= cu.warm <= WARM_MAX and 0 <= cu.cool <= COOL_MAX
+                    and 1 <= cu.reps <= REPS_MAX and 1 <= cu.work_s <= MAX_TOTAL_S
+                    and 0 <= cu.rest_s <= MAX_TOTAL_S) or cu.total_s() > MAX_TOTAL_S:
+        raise ValueError("sesion fuera de rango")
+    return s
+
+
+# ------------------------------------------------------------------ para dibujar
+_HR_TO_FTP = ((55, 45), (65, 65), (75, 82), (82, 91), (87, 100), (92, 108), (100, 118))
+
+
+def intensity(b: Block) -> int:
+    """%FTP aproximado de un bloque, solo para dibujar su perfil: el rango en %FTP si lo tiene, si
+    no el de FC convertido con una tabla aproximada, y 50 si no tiene objetivo (libre)."""
+    if b.ftp:
+        lo, hi = b.ftp
+        return round((lo + hi) / 2) if hi is not None else lo + 10
+    if b.hr:
+        lo, hi = b.hr
+        mid = (lo + (hi if hi is not None else lo + 5)) / 2.0
+        pts = _HR_TO_FTP
+        if mid <= pts[0][0]:
+            return pts[0][1]
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if mid <= x1:
+                return round(y0 + (y1 - y0) * (mid - x0) / (x1 - x0))
+        return pts[-1][1]
+    return 50
+
+
+def band(pct: int) -> int:
+    """0..6 = recuperacion, resistencia, tempo, sweet spot, umbral, VO2max, maximo (por %FTP)."""
+    return 0 if pct < 56 else 1 if pct < 76 else 2 if pct < 88 else 3 if pct < 95 else \
+        4 if pct < 106 else 5 if pct < 121 else 6
+
+
+def profile(w: Workout | None, limit: int = 120) -> list:
+    """[[segundos, %FTP aproximado], ...] de los bloques expandidos, para el grafico del menu."""
+    if w is None:
+        return []
+    return [[s.block.secs, intensity(s.block)] for s in w.slots()[:limit]]
+
+
+def _fmt_range(r, unit: str) -> str:
+    lo, hi = r
+    return f"{lo}+% {unit}" if hi is None else f"{lo}-{hi}% {unit}"
+
+
+def _fmt_target(b: Block) -> str:
+    if b.ftp:
+        return _fmt_range(b.ftp, "FTP")
+    if b.hr:
+        return _fmt_range(b.hr, "FC")
+    return ""
+
+
+def _fmt_part(part, short: bool = False) -> str:
+    if isinstance(part, Block):
+        t = BAND_SHORT[band(intensity(part))] if short else _fmt_target(part)
+        return " ".join(x for x in (fmt_secs(part.secs), t) if x)
+    inner = " + ".join(_fmt_part(p, short) for p in part.parts)
+    tail = f" PAUSA {_fmt_part(part.between, short)}" if part.between is not None else ""
+    return f"{part.count} X ({inner}){tail}"
+
+
+BAND_SHORT = ("RECUP", "RESIST", "TEMPO", "SWEET", "UMBRAL", "VO2", "MAX")
+
+
+def describe(w: Workout | None, maxlen: int = 44) -> list:
+    """Una linea por parte del plan, en ASCII mayusculas; las muy largas usan nombres de nivel
+    (VO2, RECUP) en vez de porcentajes para caber en el menu."""
+    if w is None:
+        return []
+    out = []
+    for part in w.parts:
+        text = _fmt_part(part)
+        out.append(text if len(text) <= maxlen else _fmt_part(part, short=True))
+    return out

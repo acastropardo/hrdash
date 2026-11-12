@@ -308,6 +308,8 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
         return 2 if never_opened else 0
     res = eng.export()
     print_summary(eng.session, res)
+    if eng.workout is not None:              # el plan elegido en el menu (la fase 4 lo sigue en vivo)
+        print(f"  plan: {eng.spec.summary().capitalize()}")
     return 2 if never_opened or not eng.session.n else 0
 
 
@@ -353,6 +355,9 @@ def persist_choices(eng, cfg: Config) -> None:
     changed = persist_last(eng.hr, eng.tr, cfg)
     if eng.trainer_pref is not None and cfg.use_trainer != eng.trainer_pref:
         cfg.use_trainer = eng.trainer_pref
+        changed = True
+    if eng.spec != cfg.session:
+        cfg.session = eng.spec
         changed = True
     if changed:
         save_config(cfg)

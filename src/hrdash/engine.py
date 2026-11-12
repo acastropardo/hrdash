@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 
-from . import proto
+from . import proto, workouts
 from .config import Config
 from .history import Session
 from .laps import LapTracker
@@ -62,6 +62,9 @@ class Engine:
         self._scan_task = None
         self._runs: dict = {}               # id(fuente) -> (fuente, evento de parada, tarea)
         self.trainer_pref: bool | None = None   # el usuario quito (False) o eligio (True) rodillo
+        self.spec = config.session              # sesion elegida en el menu (se guarda al salir)
+        self.page = "sensores"                  # pagina visible del menu: "sensores" | "sesion"
+        self.workout = None                     # plan de la sesion en curso (None = libre sin limite)
 
     # ------------------------------------------------------------ fuentes
     def _default_factory(self, slot: str, dev):
@@ -208,6 +211,7 @@ class Engine:
         """Pasa de menu a rodando: sesion y vueltas nuevas, simulador reiniciado y la distancia
         del rodillo (que corre desde que se conecto) vuelve a cero."""
         self._cancel_scan()                 # escanear mientras se rueda estorba a las conexiones
+        self.workout = self.spec.build()    # el plan elegido; la fase 4 lo sigue durante la sesion
         self.session.reset()
         self.laps.reset()
         for src in (self.hr, self.tr):
@@ -227,6 +231,17 @@ class Engine:
                 return False                # sin FC no se inicia (el menu lo muestra)
             self.begin()
             return True
+        if act.startswith("page:"):
+            page = act[5:]
+            if page in ("sensores", "sesion") and page != self.page:
+                self.page = page
+                return True
+            return False
+        new = workouts.apply_act(self.spec, act)   # kind:, min:, min1:, min5:, cu:
+        if new is not None:
+            changed = new != self.spec
+            self.spec = new
+            return changed
         if act == "scan":
             return self.request_scan(fresh=True)
         if act == "sim":
@@ -266,7 +281,16 @@ class Engine:
                             for d in self.devices],
                 "scan": dict(self.scan),
                 "sim": self.hr is self.tr and bool(getattr(self.hr, "is_sim", False)),
-                "can_play": ok, "hint": why}
+                "can_play": ok, "hint": why, "page": self.page, "session": self.session_info()}
+
+    def session_info(self) -> dict:
+        """La sesion elegida tal como la dibuja el menu: la especificacion, el plan que resulta
+        (nombre, duracion, lineas de descripcion) y su perfil de bloques para el grafico."""
+        s = self.spec
+        w = s.build()
+        return {**workouts.spec_to_dict(s), "summary": s.summary(),
+                "name": w.name if w else "Libre sin limite", "total_s": w.total_s if w else 0,
+                "lines": workouts.describe(w), "profile": workouts.profile(w)}
 
     def poll(self) -> tuple:
         """Un ciclo de 1 Hz: lee atributos, añade muestra y vuelta. (sample, closed).
