@@ -231,14 +231,43 @@ def dial_static(m, r, lo, hi, segs, major, minor, label, unit, big=True):
                   DIM, light=0.8)
 
 
-def dial_frame(m, r, value, lo, hi, major, minor, redline, col_now, alarm):
-    """Capa por frame: palitos (iluminados hasta el valor) + aguja con contrapeso."""
+_TICKS: dict = {}
+
+
+def _tick_fracs(lo, hi, major, minor):
+    """[(fraccion, es_mayor)] de los palitos de una escala (cacheado: solo depende de la escala)."""
+    key = (lo, hi, major, minor)
+    got = _TICKS.get(key)
+    if got is None:
+        got = []
+        if minor and hi > lo:
+            v = math.ceil(lo / minor) * minor
+            while v <= hi + 1e-9:
+                got.append(((v - lo) / (hi - lo),
+                            bool(major) and abs(v / major - round(v / major)) < 1e-9))
+                v += minor
+        _TICKS[key] = got
+    return got
+
+
+def dial_frame(m, r, value, lo, hi, major, minor, redline, col_now, alarm, cache=None):
+    """Capa por frame: palitos (iluminados hasta el valor) + aguja con contrapeso.
+
+    Los palitos solo cambian cuando la aguja cruza uno (el numero de encendidos), asi que su
+    geometria se cachea en `cache` por (panel, escala, encendidos, color): reconstruir ~80
+    cajas en Python por frame y por escena era la mitad del coste de CPU de la vista mixta.
+    La aguja y el cubo si se rehacen cada frame.
+    """
     frac = max(0.0, min(1.0, (value - lo) / max(1e-6, hi - lo)))
-    if minor and hi > lo:
-        v = math.ceil(lo / minor) * minor
-        while v <= hi + 1e-9:
-            f = (v - lo) / (hi - lo)
-            maj = bool(major) and abs(v / major - round(v / major)) < 1e-9
+    ticks = _tick_fracs(lo, hi, major, minor)
+    n_lit = sum(1 for f, _m in ticks if f <= frac)
+    key = (m.t, r, lo, hi, major, minor, redline, tuple(col_now), n_lit)
+    cached = cache.get(key) if cache is not None else None
+    if cached is not None:
+        m.v.extend(cached)
+    else:
+        start = len(m.v)
+        for f, maj in ticks:
             a = _dial(f)
             lit = f <= frac
             over = redline is not None and f >= redline
@@ -253,7 +282,10 @@ def dial_frame(m, r, value, lo, hi, major, minor, redline, col_now, alarm):
             m.box(math.cos(a) * base, math.sin(a) * base, 0.06,
                   ln, r * (0.062 if maj else 0.030), r * 0.06,
                   col, yaw=a, light=1.0 if lit else 0.25)
-            v += minor
+        if cache is not None:
+            if len(cache) > 600:
+                cache.clear()
+            cache[key] = m.v[start:]
     a = _dial(frac)
     ca, sa = math.cos(a), math.sin(a)
     nc = (0.98, 0.34, 0.26) if alarm else (0.97, 0.98, 1.0)
@@ -383,7 +415,8 @@ class Cluster:
             one.panel(cx, cz)
             dial_frame(one, r, anim[which], lo, hi, major, minor,
                        0.90 if which == "hr" else (0.86 if which == "w" else None),
-                       cols[which], alarm and which == "hr")
+                       cols[which], alarm and which == "hr",
+                       cache=anim.setdefault("tick_cache", {}))
             m.merge(one)
         if alarm:                                    # halo rojo pulsante sobre el dial de FC
             p = 0.45 + 0.55 * math.sin(anim["t"] * 7.0)
@@ -658,7 +691,8 @@ def hud_layers(snap, anim, aspect):
         one.panel(cx, cy)
         dial_frame(one, r, needles[which], lo, hi, major, minor,
                    0.90 if which == "hr" else (0.86 if which == "w" else None),
-                   cols[which], alarm and which == "hr")
+                   cols[which], alarm and which == "hr",
+                   cache=anim.setdefault("tick_cache", {}))
         m.merge(one)
     out.append(("hud_frame", m))
     return out

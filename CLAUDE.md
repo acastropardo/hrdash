@@ -60,7 +60,14 @@ counter, like `zoom_cmd`. The pista also returns `hud*` layers (`cluster.hud_lay
 dials as the gauge cluster) that `_draw()` renders in a second, orthographic pass after
 clearing only depth; the camera tuple carries a 6th field (HUD visible, key `i`/`hud_cmd`).
 In moderngl 5.13 `fbo.color_mask` only reaches GL on `fbo.use()`, which resets the viewport:
-restore viewport and scissor after it. Plans and
+restore viewport and scissor after it.
+
+Frame loop rules (the mixed gauge+pista view broke both): `swap_buffers` happens **once per
+window after all its slots are drawn** (split views share one window; swapping per slot meant two
+vsync waits and a half-drawn frame), and the loop must not sleep past ~16 ms (it would put 50 fps
+on a 60 Hz display). `cluster.dial_frame` caches the tick marks (`anim["tick_cache"]`); anything
+new that is rebuilt per frame in pure Python must fit the ~16 ms budget together with the other
+slot (measured: gauge ~3 ms, pista ~7 ms). Plans and
 offscreen-render checks for this work are in `docs/plans/velodromo-render.md`.
 
 ## Other drawing modules
