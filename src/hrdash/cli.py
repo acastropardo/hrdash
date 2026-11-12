@@ -60,6 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--3d-view", choices=list(SCENES_VIEWS), action="append",
                    metavar="VISTA", help="vista inicial del modo 3D, repetible para partir la "
                                           "ventana (default: gauge, los tacometros)")
+    p.add_argument("--dual", action="store_true",
+                   help="modo 3D con dos o mas vistas (--3d-view): una ventana por monitor, la pista "
+                        "en el de arriba (si no hay un monitor por vista, ventana partida)")
     p.add_argument("--export-dir", help="carpeta de exportacion (default ./exportes)")
     p.add_argument("--no-fit", action="store_true", help="no grabar archivo FIT")
     p.add_argument("--no-csv", action="store_true", help="no grabar CSV espejo")
@@ -206,7 +209,8 @@ def cmd_tui(hr_source, tr_source, cfg: Config) -> int:
 
 
 async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None = None,
-                 host=None, menu: bool = False, scanner=None, factory=None) -> int:
+                 host=None, menu: bool = False, scanner=None, factory=None,
+                 dual: bool = False) -> int:
     """Modo 3D (por defecto o `--3d`): motor + ventana, sin TUI. No hay terminal al que
     reenviar teclas.
 
@@ -224,7 +228,7 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     salir se exporta igual que en la TUI: CSV antes que FIT.
     """
     from .glview import GLHost
-    host = host or GLHost()
+    host = host or GLHost(dual=dual)
     eng = Engine(hr_source, tr_source, cfg, menu=menu, scanner=scanner, factory=factory)
     if not menu:                        # `--now`: sin menu, arranca con la sesion guardada
         eng.workout = eng.spec.build()
@@ -270,6 +274,11 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
             for m in host.drain():
                 if m.get("win"):
                     opened = True
+                if "dual" in m:
+                    print(f"doble monitor: {m.get('monitors', 0)} pantallas"
+                          if m["dual"] else
+                          f"doble monitor pedido pero hay {m.get('monitors', 0)} pantalla(s) para "
+                          f"{len(eng.views)} vistas: ventana partida")
                 ui = m.get("ui")
                 if isinstance(ui, dict) and await eng.handle_ui(ui):
                     ui_changed = True
@@ -437,7 +446,8 @@ def main(argv=None) -> int:
         return asyncio.run(cmd_3d(hr_source, tr_source, cfg,
                                   getattr(args, "3d_view") or ["gauge"], menu=not args.now,
                                   scanner=sim_scan if args.simulate else None,
-                                  factory=sim_factory if args.simulate else None))
+                                  factory=sim_factory if args.simulate else None,
+                                  dual=args.dual))
 
     if not sys.stdout.isatty():
         print("La consola (--ascii) necesita un terminal interactivo. Usa --duration para "

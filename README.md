@@ -66,7 +66,9 @@ lado, y la ultima eleccion se recuerda. Una vez iniciado, el plan se sigue en vi
 el rango objetivo (EN RANGO / SUBE / BAJA), el siguiente bloque y la barra del plan, un arco objetivo en el
 dial de FC o de potencia y un destello al cambiar de bloque; al terminar el plan avisa y sigues libre. El CSV
 gana una columna `bloque`, el FIT un lap por bloque y el resumen final una linea por bloque. `espacio` pausa
-y reanuda la sesion (el reloj y el plan se congelan). El motor muestrea y graba igual,
+y reanuda la sesion (el reloj y el plan se congelan). Con dos monitores, `--dual --3d-view pista
+--3d-view gauge` abre una ventana a pantalla completa por vista, la pista en el monitor de arriba (si no
+hay un monitor por vista, ventana partida). El motor muestrea y graba igual,
 la terminal solo muestra una linea de estado y el resumen al salir (`q` en la ventana o
 Ctrl+C en la terminal graban FIT + CSV). Tras el menu arranca en los tacometros; dentro de la ventana
 `←`/`→` rotan entre vistas (FC → watts → tacometros → pista) y `h`/`w`/`g`/`p` saltan a
