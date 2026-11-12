@@ -34,6 +34,7 @@ class Config:
     lap_m: int = 5000            # largo de vuelta de la vista pista (en metros)
     last_device: str | None = None  # nombre o direccion de la ultima banda
     last_trainer: str | None = None  # nombre o direccion del ultimo rodillo
+    use_trainer: bool = True         # False: el usuario eligio "sin rodillo" en el menu
     workout: workouts.Workout | None = None   # ultimo plan por bloques/intervalos (None = libre)
 
     def computed_hrmax(self) -> int:
@@ -56,7 +57,7 @@ def load_config() -> Config:
         except Exception:
             return cfg
         for k in ("age", "sex", "weight", "ftp", "hrmax", "export_dir", "wheel_mm", "lap_m",
-                  "export_fit", "export_csv", "last_device", "last_trainer"):
+                  "export_fit", "export_csv", "last_device", "last_trainer", "use_trainer"):
             if k in data:
                 setattr(cfg, k, data[k])
         if "workout" in data:
@@ -94,6 +95,8 @@ def save_config(cfg: Config) -> None:
         lines.append(f'last_device = "{cfg.last_device}"')
     if cfg.last_trainer:
         lines.append(f'last_trainer = "{cfg.last_trainer}"')
+    if not cfg.use_trainer:
+        lines.append("use_trainer = false")
     if cfg.workout is not None:
         lines.append("workout = " + workouts.to_toml_inline(workouts.to_dict(cfg.workout)))
     CONFIG_PATH.write_text("\n".join(lines) + "\n")
