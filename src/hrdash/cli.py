@@ -250,6 +250,7 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     never_opened = False  # err antes de win: sin display, esta ruta no tiene sentido
     last_push = 0.0
     last_block = None
+    seen_state: dict = {}
     try:
         while seconds is None or seconds > 0:
             # En el menu se sondea a 10 Hz (un clic no puede esperar 1 s) y el snapshot sale a
@@ -259,6 +260,18 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
             s, closed = eng.poll()
             if seconds is not None:
                 seconds -= tick
+            for slot, src in (("FC", eng.hr), ("rodillo", eng.tr)):    # estado de cada sensor
+                if src is None or getattr(src, "is_sim", False):
+                    continue
+                got = (getattr(src, "latest_hr", None) is not None) if slot == "FC" else any(
+                    getattr(src, a, None) is not None for a in ("watts", "cadence", "speed_kmh"))
+                st = (id(src), bool(getattr(src, "connected", False)), got,
+                      str(getattr(src, "error", "") or "")[:60])
+                if seen_state.get(slot) != st:
+                    seen_state[slot] = st
+                    what = ("con datos" if got else "conectado, sin datos aun") if st[1] else (
+                        f"error: {st[3]}" if st[3] else "conectando...")
+                    print(f"[{eng.phase}] {slot} {getattr(src, 'name', '')}: {what}")
             lab = eng.block_label()
             if lab is not None and lab != last_block:       # cambio de bloque del plan, en la terminal
                 last_block = lab
