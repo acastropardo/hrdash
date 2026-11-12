@@ -352,3 +352,23 @@ donde no hay vsync, asi que lo del vsync se razona por el codigo y los conteos, 
   (Ctrl+C graba, 11/11); smoke FIT OK.
 - La unidad del dial de potencia pasa de `%FTP` a `WATTS` (el dial muestra watts; las bandas de color siguen siendo por %FTP), tambien en el HUD (antes `W`).
 
+## Extra: el ciclista pedaleaba al reves
+
+**Estado: hecho.** Reportado como sensacion ("pedalea hacia atras mientras la bici va hacia
+adelante"); era un error de signo real.
+
+- `anim["crank"]` y `anim["roll"]` son angulos en el plano de la bici (s = avance, h = altura) y
+  crecian. Pedalear o rodar hacia adelante es en sentido horario en ese plano (el pie de arriba
+  avanza y luego baja; la parte alta de la rueda avanza), o sea con el angulo decreciendo. Medido
+  con el codigo anterior: pedal en lo alto `ds = -0,008`, pedal delante `dh = +0,008`, marca de
+  rueda en lo alto `ds = -0,05`; todo al reves. Las marcas de las ruedas (logo de la lenticular y
+  palos de la delantera) giraban igual de mal.
+- Ahora las dos se restan en `scene_pista`. Medido: pedal en lo alto `ds = +0,008`, delante
+  `dh = -0,008`, rueda `ds = +0,05`; en 1 s a 60 rpm la biela da -2 pi y a 30 km/h la rueda
+  -24,9 rad (= v / R).
+- Verificado con 4 capturas separadas 0,24 s con un reloj de la biela (antihorario antes,
+  horario despues), smoke FIT y app real (Ctrl+C graba, 11/11).
+- Ojo, aparte: por muestreo, a pocos fps la delantera de 3 palos puede parecer girar al reves
+  (efecto rueda de carreta) cuando el giro por fotograma pasa de 60 grados: por encima de
+  76 km/h a 60 fps, 57 a 45 fps y 38 a 30 fps.
+
