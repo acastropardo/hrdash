@@ -233,6 +233,8 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     if not menu:                        # `--now`: sin menu, arranca con la sesion guardada
         eng.workout = eng.spec.build()
     eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
+    if dual and len(eng.views) < 2:
+        print("--dual necesita dos vistas (--3d-view pista --3d-view gauge): ventana unica.")
     if not host.start():
         print(f"3D: {host.error or '3D no disponible: pip install -e \".[gl]\"'}")
         return 2
@@ -277,8 +279,8 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
                 if "dual" in m:
                     print(f"doble monitor: {m.get('monitors', 0)} pantallas"
                           if m["dual"] else
-                          f"doble monitor pedido pero hay {m.get('monitors', 0)} pantalla(s) para "
-                          f"{len(eng.views)} vistas: ventana partida")
+                          f"doble monitor no disponible ({m.get('why', '')}; {m.get('monitors', 0)} "
+                          f"pantalla(s), {len(eng.views)} vistas): ventana partida")
                 ui = m.get("ui")
                 if isinstance(ui, dict) and await eng.handle_ui(ui):
                     ui_changed = True
@@ -444,7 +446,8 @@ def main(argv=None) -> int:
         # Si el entorno no da para GL, cmd_3d avisa y sale con 2 (la TUI no se toca).
         # El dest de "--3d-view" es "3d_view", no un identificador valido: getattr.
         return asyncio.run(cmd_3d(hr_source, tr_source, cfg,
-                                  getattr(args, "3d_view") or ["gauge"], menu=not args.now,
+                                  getattr(args, "3d_view") or (["pista", "gauge"] if args.dual else ["gauge"]),
+                                  menu=not args.now,
                                   scanner=sim_scan if args.simulate else None,
                                   factory=sim_factory if args.simulate else None,
                                   dual=args.dual))
