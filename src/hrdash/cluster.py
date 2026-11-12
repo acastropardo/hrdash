@@ -298,21 +298,24 @@ ZCOLORS_FALLBACK = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4
 class Cluster:
     """Arma el cluster en 3 capas: estatica (raro), valores (1 Hz) y agujas (por frame)."""
 
-    def __init__(self):
-        self._cache = {}
-
     def build(self, snap, anim, aspect):
-        """([(nombre, malla_o_None)], camara); None en una capa = conservar su VBO."""
+        """([(nombre, malla_o_None)], camara); None en una capa = conservar su VBO.
+
+        La cache de "ya subido" vive en `anim`, que es de cada ventana/vista: con una cache
+        global, al volver al tablero (flechas o `g`) la vista nueva no tenia VBOs pero la
+        cache decia que si, y el panel salia sin fondo ni escalas.
+        """
+        cache = anim.setdefault("cluster_cache", {})
         cfg = self._scales(snap)
         layers = []
-        if cfg != self._cache.get("cfg"):
-            self._cache["cfg"] = cfg
+        if cfg != cache.get("cfg"):
+            cache["cfg"] = cfg
             layers.append(("static", self._static(cfg)))
         else:
             layers.append(("static", None))
         vsig = (snap.get("version"), round(cfg["hr"][1]), round(cfg["w"][1]))
-        if vsig != self._cache.get("vsig"):
-            self._cache["vsig"] = vsig
+        if vsig != cache.get("vsig"):
+            cache["vsig"] = vsig
             layers.append(("values", self._values(snap, cfg)))
         else:
             layers.append(("values", None))

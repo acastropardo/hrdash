@@ -34,10 +34,10 @@ source .venv/bin/activate          # o alias: alias hrdash="$HOME/Documents/fc/.
 ## Uso
 
 ```bash
-hrdash                    # ventana 3D (pista con tacometros), sin consola; pregunta edad/sexo/peso
+hrdash                    # ventana 3D (arranca en los tacometros), sin consola; pregunta edad/sexo/peso
 hrdash --ascii            # la consola de siempre (TUI) en la terminal
 hrdash --3d               # 3D explicito: si no hay GL o pantalla, falla en vez de caer a --ascii
-hrdash --3d-view gauge    # 3D con otra vista (hr, watts, gauge, pista); repetible para partir
+hrdash --3d-view pista    # 3D con otra vista inicial (hr, watts, gauge, pista); repetible para partir
 hrdash --scan             # lista sensores de FC y rodillos detectados y sale
 hrdash --probe 12         # vuelca GATT y payloads crudos del dispositivo (diagnóstico)
 hrdash --sensor "R+2.0" --trainer "Tacx"   # fuerza nombres o direcciones
@@ -50,9 +50,10 @@ hrdash --fresh            # vuelve a preguntar aunque haya config guardada
 
 Por defecto `hrdash` abre la **ventana 3D sin consola**: el motor muestrea y graba igual,
 la terminal solo muestra una linea de estado y el resumen al salir (`q` en la ventana o
-Ctrl+C en la terminal graban FIT + CSV). Dentro de la ventana: `h`/`w`/`g`/`p` y `←`/`→`
-cambian de vista, `3`/`r` abren o cierran el tablero o la pista, `v` cambia la camara,
-`i` muestra u oculta los tacometros, `+`/`-` o la rueda hacen zoom y `x`/`s` reinician o
+Ctrl+C en la terminal graban FIT + CSV). Arranca en los tacometros; dentro de la ventana
+`←`/`→` rotan entre vistas (FC → watts → tacometros → pista) y `h`/`w`/`g`/`p` saltan a
+una, `3`/`r` abren o cierran el tablero o la pista, `v` cambia la camara, `i` muestra u
+oculta los tacometros de la pista, `+`/`-` o la rueda hacen zoom y `x`/`s` reinician o
 reconectan. Si el 3D no puede arrancar (sin el extra `gl` o, en Linux, sin pantalla),
 `hrdash` cae a la consola con un aviso.
 
