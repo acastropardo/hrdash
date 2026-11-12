@@ -350,5 +350,5 @@ donde no hay vsync, asi que lo del vsync se razona por el codigo y los conteos, 
   2.880 escalas, en todas las lecturas (0-259 ppm, 0-1599 W, 0-99,9 km/h, 0-259 rpm) y en
   todas las filas de abajo; capturas con valores normales, en cero y maximos; HUD; app real
   (Ctrl+C graba, 11/11); smoke FIT OK.
-- Observacion no tocada: el dial de potencia muestra watts pero su unidad dice `%FTP`.
+- La unidad del dial de potencia pasa de `%FTP` a `WATTS` (el dial muestra watts; las bandas de color siguen siendo por %FTP), tambien en el HUD (antes `W`).
 

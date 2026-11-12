@@ -440,7 +440,7 @@ def dial_values(m, r, digits, alarm, avg=None):
 BIG_R, SMALL_R = 1.18, 0.78
 DIALS = (                      # (clave, centro x, centro z, radio, etiqueta, unidad)
     ("hr", -2.30, 0.72, BIG_R, "FRECUENCIA", "BPM"),
-    ("w", 2.30, 0.72, BIG_R, "POTENCIA", "%FTP"),
+    ("w", 2.30, 0.72, BIG_R, "POTENCIA", "WATTS"),
     ("v", -3.60, -2.08, SMALL_R, "VELOCIDAD", "KM/H"),
     ("c", 3.60, -2.08, SMALL_R, "CADENCIA", "RPM"),
 )
@@ -722,7 +722,7 @@ def _hud_layout(aspect):
     big, small = HUD_BIG * s, HUD_SMALL * s
     return s, {
         "hr": (-a + 0.34 * s, -1.0 + 0.34 * s, big, "FRECUENCIA", "BPM"),
-        "w": (-a + 0.86 * s, -1.0 + 0.20 * s, small, "POTENCIA", "W"),
+        "w": (-a + 0.86 * s, -1.0 + 0.20 * s, small, "POTENCIA", "WATTS"),
         "v": (a - 0.34 * s, -1.0 + 0.34 * s, big, "VELOCIDAD", "KM/H"),
         "c": (a - 0.86 * s, -1.0 + 0.20 * s, small, "CADENCIA", "RPM"),
     }
