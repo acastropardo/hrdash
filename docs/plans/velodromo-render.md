@@ -211,6 +211,26 @@ Captura lateral: se lee como un muneco de palos, no como un ciclista.
   quieto en el apron (hoy se quedaria parado en un muro de 45 deg).
 - Tobillo con angulo segun la fase de biela y un leve balanceo de cadera/hombros.
 
+**Estado: hecha.**
+
+- Inclinacion fisica respecto a la vertical, `tan(phi) = v^2 * kappa / g`, con kappa la
+  curvatura en la linea del rider (`_kappa` + desplazamiento lateral), limitada a 55 grados
+  y a 1,2 rad/s. Medido en el centro del arco: 60 km/h -> 50 grados, 54 -> 44 (= peralte),
+  38 -> 26; en recta 0 aunque el tablon este a 12.
+- Linea segun velocidad (`_line_for`), con deriva lateral maxima de 0,6 m/s: >= 34 km/h
+  sobre la negra (q 0,50), de 34 a 18 baja a la cote d'azur (q -0,35), de 18 a 10 sale a la
+  zona de seguridad (q -1,70) y por debajo se queda ahi. Con mu ~0,6 la velocidad minima en
+  el arco de 45 grados es ~27 km/h.
+- `_ground()` da el suelo bajo cualquier linea (cubierta peraltada o apron llano); trail y
+  sombras usan la normal del suelo, el rider su propio marco inclinado.
+- Camara chase en un marco inclinado la mitad que el rider (`CAM_LEAN`); antes usaba la
+  normal del peralte y en la curva quedaba desplazada hacia dentro. La POV sigue al rider.
+- Verificado: tabla de inclinaciones/lineas de arriba, capturas a 54, 38 y 22 km/h en el
+  arco, lateral a 54, recta a 45 y casi parado en el apron; `scene_pista` 3,4 ms/frame;
+  ventana real sin `err` (~28 fps llvmpipe); smoke FIT OK.
+- No hecho: balanceo de cadera/hombros (el tronco es rigido y cacheado; moverlo obliga a
+  transformar esa parte por frame).
+
 ### Fase 5 - pulido
 
 - Sombra de contacto suave (disco con alpha radial, requiere blending) en vez de disco negro.

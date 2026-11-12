@@ -123,6 +123,14 @@ STAND_ROWS, STAND_RUN, STAND_RISE = 11, 0.85, 0.40      # gradas escalonadas
 # arco, y en las rectas queda un muro (frontón) entre la barandilla y la primera fila.
 STAND_Z = DECK + (COTE + TRACK_W) * math.sin(BANK_C) + WALL_H
 ROOF_H, LAMP_H = STAND_Z + STAND_ROWS * STAND_RISE + 9.0, STAND_Z + 5.5
+# Fase 4: linea y postura segun la velocidad. Con mu ~0,6 la velocidad minima en el arco de
+# 45 grados es sqrt(g R (tan45 - mu) / (1 + mu tan45)) ~ 27 km/h: por debajo, un ciclista real
+# baja a la cote d'azur, y casi parado sale a la zona de seguridad.
+LINE_FAST, LINE_SLOW, LINE_STOP = 34.0, 18.0, 10.0     # km/h
+COTE_Q, APRON_Q = -COTE / 2.0, -COTE - 1.0              # linea en la cote d'azur y en el apron
+LINE_RATE = 0.6                      # deriva lateral maxima (m/s)
+LEAN_MAX, LEAN_RATE = math.radians(55.0), 1.2           # inclinacion maxima y su velocidad (rad/s)
+CAM_LEAN = 0.5                       # la chase se inclina la mitad que el rider
 APRON_W = 2.5                        # zona de seguridad llana al pie de la cote d'azur
 RIDER_Q = 0.50                       # linea del rider: justo encima de la negra (persecucion)
 # Lineas pintadas, medidas desde el borde interior: (centro, color, ancho). La negra (de
@@ -1204,6 +1212,29 @@ def _rider(base, fwd, up, lat, theta, roll, kit, pov=False) -> "ArrMesh":
     return ArrMesh(out)
 
 
+def _line_for(kmh):
+    """Linea lateral (q, metros desde el borde interior) que toma el rider a `kmh`."""
+    if kmh >= LINE_FAST:
+        return RIDER_Q
+    if kmh >= LINE_SLOW:
+        return COTE_Q + (RIDER_Q - COTE_Q) * (kmh - LINE_SLOW) / (LINE_FAST - LINE_SLOW)
+    if kmh >= LINE_STOP:
+        return APRON_Q + (COTE_Q - APRON_Q) * (kmh - LINE_STOP) / (LINE_SLOW - LINE_STOP)
+    return APRON_Q
+
+
+def _ground(pt, q):
+    """(posicion, normal, lateral) del suelo bajo la linea `q`: la cubierta peraltada
+    (tablon y cote d'azur) o, por debajo de -COTE, la zona de seguridad llana."""
+    if q >= -COTE:
+        p, n, h = _surf(pt, q)
+        cb, sb = math.cos(pt[4]), math.sin(pt[4])
+        return p, n, (h[0] * cb, h[1] * cb, sb)
+    p, _n, h = _surf(pt, -COTE)
+    o = -COTE - q
+    return (p[0] - h[0] * o, p[1] - h[1] * o, DECK), (0.0, 0.0, 1.0), (h[0], h[1], 0.0)
+
+
 def scene_pista(snap, anim, aspect=1.6):
     """Velodromo de 250 m a escala real (1 unidad = 1 m): rectas a 12 grados, clotoides y
     arcos a 45 grados.
@@ -1255,11 +1286,33 @@ def scene_pista(snap, anim, aspect=1.6):
     bl = math.hypot(btx, bty) or 1.0
     fx, fy = btx / bl, bty / bl
     nx, ny = fy, -fx                                       # normal horizontal (exterior)
-    cb, sb = math.cos(bank), math.sin(bank)
-    up = (-nx * sb, -ny * sb, cb)                          # normal del plano inclinado
-    lat = (nx * cb, ny * cb, sb)                           # lateral sobre la superficie
     fwd = (fx, fy, 0.0)
-    base = _surf((bx, by, btx, bty, bank), RIDER_Q)[0]
+    v, dt = anim["v"], anim["dt"]
+    # Linea segun la velocidad: deriva lateral limitada, como un ciclista que sube o baja.
+    tq = _line_for(v * 3.6)
+    q = anim["q"] if anim.get("q") is not None else tq
+    q += max(-LINE_RATE * dt, min(LINE_RATE * dt, tq - q))
+    anim["q"] = q
+    base, sup, slat = _ground((bx, by, btx, bty, bank), q)
+    # Inclinacion fisica respecto a la vertical: tan(phi) = v^2 * kappa / g, con kappa la
+    # curvatura en la linea del rider (mas por fuera, radio mayor). A la velocidad de diseno
+    # coincide con el peralte; por debajo el rider va "de pie" respecto a la madera, que es lo
+    # real. En recta va vertical aunque el tablon este a 12 grados.
+    kap = _kappa(anim["frac"] * TRACK_LEN)
+    if kap > 0.0:
+        kap = 1.0 / (1.0 / kap + max(0.0, q - AXIS_Q) * math.cos(bank))
+    phi_t = min(LEAN_MAX, math.atan(v * v * kap / 9.81))
+    phi = anim.get("lean", 0.0)
+    phi += max(-LEAN_RATE * dt, min(LEAN_RATE * dt, phi_t - phi))
+    anim["lean"] = phi
+
+    def frame(a):
+        """(up, lat) inclinados `a` rad hacia el interior de la curva."""
+        ca, sa = math.cos(a), math.sin(a)
+        return (-nx * sa, -ny * sa, ca), (nx * ca, ny * ca, sa)
+
+    up, lat = frame(phi)                                   # marco del rider
+    cup, clat = frame(phi * CAM_LEAN)                      # marco de la camara chase
     # Estela por posiciones reales: al pararse deja de crecer y se desvanece (no avanza
     # por detrás de un rider que ya esta quieto). Es una pegatina sobre el madera, no una
     # caja flotando 2 cm encima, que era lo que la hacía leer como basura.
@@ -1267,7 +1320,7 @@ def scene_pista(snap, anim, aspect=1.6):
     # La cinta es fina (4 cm, como una linea pintada) y termina detras de la rueda trasera:
     # los discos superpuestos de antes se leian como una mancha bajo la bici.
     if not tr or math.hypot(base[0] - tr[-1][1][0], base[1] - tr[-1][1][1]) >= 0.05:
-        tr.append((anim["t"], base, lat, up))
+        tr.append((anim["t"], base, slat, sup))
     while tr and (anim["t"] - tr[0][0] > TRAIL_T or len(tr) > 24):
         tr.pop(0)
     tail = [e for e in tr
@@ -1284,8 +1337,8 @@ def scene_pista(snap, anim, aspect=1.6):
     pov = dist < 0.5
     # Sombras de contacto bajo las ruedas y el pedalier: sin anclaje al suelo la bici flota.
     for c, r in ((REAR, 0.11), (FRONT, 0.11), ((0.0, 0.0), 0.17)):
-        p = tuple(base[j] + fwd[j] * c[0] + up[j] * 0.006 for j in range(3))
-        m.plate(p, r, tuple(up), SHADOW, 12, 0.0)
+        p = tuple(base[j] + fwd[j] * c[0] + sup[j] * 0.006 for j in range(3))
+        m.plate(p, r, tuple(sup), SHADOW, 12, 0.0)
     rider = _rider(base, fwd, up, lat, anim["crank"], anim["roll"], col, pov=pov)
 
     # Inercia de la orbita: los eventos de arrastre llegan a 60-120 Hz y el frame va a ~50 fps;
@@ -1294,7 +1347,7 @@ def scene_pista(snap, anim, aspect=1.6):
     anim["yaw"] += (anim["yaw_t"] - anim["yaw"]) * kk
     anim["tilt"] += (anim["tilt_t"] - anim["tilt"]) * kk
     yaw, tilt = anim["yaw"], anim["tilt"]
-    pax = tuple(-x for x in lat)                 # eje de cabeceo de la camara
+    pax = tuple(-x for x in (lat if pov else clat))     # eje de cabeceo de la camara
 
     if pov:
         # 1a persona: la camara esta dentro del casco (a la altura de los ojos, no de la
@@ -1309,7 +1362,9 @@ def scene_pista(snap, anim, aspect=1.6):
         gaze = _rot(_rot(tuple(fwd[j] - pitch * up[j] for j in range(3)), up, yaw), pax, -tilt)
     else:
         # chase: camara alta y detras, mirando ligeramente hacia abajo sobre la bici;
-        # al cerrar el zoom sube al casco (primera persona). Alturas medidas en `up`.
+        # al cerrar el zoom sube al casco (primera persona). Alturas medidas en `cup`:
+        # la camara se inclina la mitad que el rider (con la normal del peralte, en la curva
+        # quedaba desplazada hacia dentro y el rider salia al borde del cuadro).
         k = min(1.0, max(0.0, (dist - ZOOM_MIN) / 0.6))
         # open angular: con 0,62 la bici quedaba fuera del cuadro a 2,4 m. En primera persona
         # hace falta mas angular y mas pitch para ver manillar y rueda delante de la mira.
@@ -1320,15 +1375,15 @@ def scene_pista(snap, anim, aspect=1.6):
         s0 = -dist
         # El rig (ojo y mira) gira alrededor del torso del rider: `tilt` positivo sube el ojo y la
         # mira cae con el mismo angulo, que es lo que mantiene al rider en el cuadro al orbitar.
-        pivot = tuple(base[j] + up[j] * HEAD[1] * 0.5 for j in range(3))
-        rig0 = tuple(-fwd[j] * dist + up[j] * (eh - HEAD[1] * 0.5) for j in range(3))
-        eye = tuple(pivot[j] + _rot(_rot(rig0, up, yaw), pax, tilt)[j] for j in range(3))
+        pivot = tuple(base[j] + cup[j] * HEAD[1] * 0.5 for j in range(3))
+        rig0 = tuple(-fwd[j] * dist + cup[j] * (eh - HEAD[1] * 0.5) for j in range(3))
+        eye = tuple(pivot[j] + _rot(_rot(rig0, cup, yaw), pax, tilt)[j] for j in range(3))
         # El arrastre no puede meter el ojo por debajo del tablon: en la recta un tilt negativo
         # lo hundia, y en la curva ya lo sube el peralte.
-        h = sum(up[j] * (eye[j] - base[j]) for j in range(3))
+        h = sum(sup[j] * (eye[j] - base[j]) for j in range(3))
         if h < LOOK_MIN_H:
-            eye = tuple(eye[j] + up[j] * (LOOK_MIN_H - h) for j in range(3))
-        gaze = _rot(_rot(tuple(fwd[j] - pitch * up[j] for j in range(3)), up, yaw), pax, tilt)
+            eye = tuple(eye[j] + sup[j] * (LOOK_MIN_H - h) for j in range(3))
+        gaze = _rot(_rot(tuple(fwd[j] - pitch * cup[j] for j in range(3)), cup, yaw), pax, tilt)
 
     center = tuple(eye[j] + gaze[j] * ahead for j in range(3))
     return layers + [("frame", m), ("rider", rider)], (eye, center, (0.0, 0.0, 1.0), fovy, 300.0)
@@ -1444,7 +1499,7 @@ def _new_anim():
     return {"t": 0.0, "needle": 0.0, "frac": 0.0, "last": 0.0,
             "hr": 0.0, "w": 0.0, "v": 0.0, "c": 0.0, "dt": 0.0, "crank": 0.0, "roll": 0.0,
             "yaw": 0.0, "yaw_t": 0.0, "tilt": 0.0, "tilt_t": 0.0,
-            "trail": [], "pts": None, "static": None, "anchor": None}
+            "trail": [], "pts": None, "static": None, "anchor": None, "q": None, "lean": 0.0}
 
 
 # Teclas de vista en standalone (`--3d`, sin TUI): `h/w/g/p` cambian a esa vista, `3` y `r`
