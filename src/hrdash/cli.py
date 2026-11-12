@@ -55,7 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--simulate", action="store_true",
                    help="sensor+rodillo simulados (sin BLE) para probar el dashboard")
     p.add_argument("--3d-view", choices=list(SCENES_VIEWS), action="append",
-                   metavar="VISTA", help="vistas del modo 3D, repetible (default: pista)")
+                   metavar="VISTA", help="vista inicial del modo 3D, repetible para partir la "
+                                          "ventana (default: gauge, los tacometros)")
     p.add_argument("--export-dir", help="carpeta de exportacion (default ./exportes)")
     p.add_argument("--no-fit", action="store_true", help="no grabar archivo FIT")
     p.add_argument("--no-csv", action="store_true", help="no grabar CSV espejo")
@@ -204,7 +205,7 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     from .glview import GLHost
     host = host or GLHost()
     eng = Engine(hr_source, tr_source, cfg)
-    eng.views = [v for v in (views or ["pista"]) if v in SCENES_VIEWS]
+    eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
     if not host.start():
         print(f"3D: {host.error or '3D no disponible: pip install -e \".[gl]\"'}")
         return 2
@@ -358,7 +359,7 @@ def main(argv=None) -> int:
         # Si el entorno no da para GL, cmd_3d avisa y sale con 2 (la TUI no se toca).
         # El dest de "--3d-view" es "3d_view", no un identificador valido: getattr.
         return asyncio.run(cmd_3d(hr_source, tr_source, cfg,
-                                  getattr(args, "3d_view") or ["pista"]))
+                                  getattr(args, "3d_view") or ["gauge"]))
 
     if not sys.stdout.isatty():
         print("La consola (--ascii) necesita un terminal interactivo. Usa --duration para "

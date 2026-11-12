@@ -13,7 +13,8 @@ Plain `hrdash` (or `--3d`) runs `cmd_3d`: engine + GLFW window, no TUI. `--ascii
 Textual console. `--3d`, `--ascii`, `--scan`, `--probe` and `--duration` are one mutually
 exclusive argparse group; `--simulate` must stay **outside** it so it combines with any of
 them (it broke once; the smoke test catches it). `--3d-view VISTA` (repeatable, dest read
-with `getattr`, default `pista`) picks the initial views. Only the implicit default falls
+with `getattr`, default `gauge`) picks the initial views; in the window `left`/`right`
+rotate through `proto.VIEW_ORDER` (`standalone_key`). Only the implicit default falls
 back to the TUI when `gl_unavailable()` says so; explicit `--3d` fails instead.
 
 `cmd_3d` must catch `asyncio.CancelledError` as well as `KeyboardInterrupt`: since Python
