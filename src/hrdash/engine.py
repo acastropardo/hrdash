@@ -158,9 +158,12 @@ class Engine:
             self.hr = hr
         if not keep_tr:
             self.tr = tr
+        # Primero se suelta la fuente que sale y despues arranca la nueva: dos conexiones a la
+        # vez al mismo dispositivo (la que el arranque resolvio solo y la que se elige en el
+        # menu) se pisan en CoreBluetooth y la nueva se queda sin notificaciones.
+        await self._release_unused()
         self._ensure_running(self.hr)
         self._ensure_running(self.tr)
-        await self._release_unused()
 
     async def assign_device(self, dev_id: str) -> bool:
         """Asigna un dispositivo de la ultima lista: las bandas a FC, los rodillos al rodillo."""

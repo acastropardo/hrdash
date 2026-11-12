@@ -352,6 +352,15 @@ class _BLESource:
         client = BleakClient(address)
         try:
             await client.connect(timeout=15.0)
+        except asyncio.CancelledError:
+            # Cancelada a medio conectar (el menu cambia de sensor mientras la del arranque aun
+            # conecta): sin cerrar el intento, CoreBluetooth deja el dispositivo "conectando" y la
+            # fuente nueva no recibe notificaciones.
+            try:
+                await asyncio.wait_for(asyncio.shield(client.disconnect()), 3.0)
+            except BaseException:  # noqa: BLE001 - limpieza; se re-lanza la cancelacion
+                pass
+            raise
         except Exception as e:  # noqa: BLE001
             self.error = f"no se pudo conectar: {e}"
             await asyncio.sleep(3.0)
