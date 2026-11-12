@@ -62,8 +62,10 @@ La pestana **SESION** (tecla `2`; `1` vuelve a SENSORES) elige que vas a hacer: 
 sweet spot 45', noruego 4x4, VO2max 5x3, 30/30, Tabata 20/10, umbral 2x20) o una sesion
 **personalizada**: calentar, N series de esfuerzo y pausa (duracion y nivel de cada uno) y enfriar. Se ve el
 perfil de bloques y la duracion total, los valores se ajustan con Izquierda/Derecha o con el clic a cada
-lado, y la ultima eleccion se recuerda. (De momento la sesion solo elige y guarda el plan; seguirlo en vivo
-llega en la siguiente fase.) Una vez iniciado, el motor muestrea y graba igual,
+lado, y la ultima eleccion se recuerda. Una vez iniciado, el plan se sigue en vivo: una tira con el bloque, la cuenta atras,
+el rango objetivo (EN RANGO / SUBE / BAJA), el siguiente bloque y la barra del plan, un arco objetivo en el
+dial de FC o de potencia y un destello al cambiar de bloque; al terminar el plan avisa y sigues libre. El CSV
+gana una columna `bloque`. El motor muestrea y graba igual,
 la terminal solo muestra una linea de estado y el resumen al salir (`q` en la ventana o
 Ctrl+C en la terminal graban FIT + CSV). Tras el menu arranca en los tacometros; dentro de la ventana
 `←`/`→` rotan entre vistas (FC → watts → tacometros → pista) y `h`/`w`/`g`/`p` saltan a

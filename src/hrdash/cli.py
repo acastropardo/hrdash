@@ -215,6 +215,8 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     from .glview import GLHost
     host = host or GLHost()
     eng = Engine(hr_source, tr_source, cfg, menu=menu, scanner=scanner, factory=factory)
+    if not menu:                        # `--now`: sin menu, arranca con la sesion guardada
+        eng.workout = eng.spec.build()
     eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
     if not host.start():
         print(f"3D: {host.error or '3D no disponible: pip install -e \".[gl]\"'}")
@@ -230,6 +232,7 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     opened = False        # primer mensaje `win` del hijo: la ventana existe
     never_opened = False  # err antes de win: sin display, esta ruta no tiene sentido
     last_push = 0.0
+    last_block = None
     try:
         while seconds is None or seconds > 0:
             # En el menu se sondea a 10 Hz (un clic no puede esperar 1 s) y el snapshot sale a
@@ -239,6 +242,10 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
             s, closed = eng.poll()
             if seconds is not None:
                 seconds -= tick
+            lab = eng.block_label()
+            if lab is not None and lab != last_block:       # cambio de bloque del plan, en la terminal
+                last_block = lab
+                print("[%02d:%02d] bloque: %s" % (*divmod(int(eng.session.elapsed_s), 60), lab))
             now = time.monotonic()
             if eng.phase != "menu" or now - last_push >= 0.5:
                 last_push = now

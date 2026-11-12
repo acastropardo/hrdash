@@ -468,6 +468,115 @@ HALF_X, HALF_Z = 4.70, 2.95     # extensores del cluster: enmarcan a pantalla ll
 ZCOLORS_FALLBACK = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
 
 
+# ---------------------------------------------------------------- plan de entrenamiento (fase 4)
+# Colores del estado frente al objetivo del bloque: dentro, por debajo, por encima, sin lectura.
+TGT_COL = {"ok": (0.30, 0.95, 0.45), "low": (0.35, 0.68, 1.0), "high": (1.0, 0.36, 0.30),
+           None: (0.92, 0.94, 0.98)}
+TGT_WORD = {"ok": "EN RANGO", "low": "SUBE", "high": "BAJA", None: ""}
+
+
+def dial_target(m, r, lo, hi, tlo, thi, status):
+    """Arco del objetivo del bloque sobre el bisel de un dial: de `tlo` a `thi` (None = hasta el
+    final de la escala) en el color del estado. Va en la capa de valores (cambia con el bloque
+    y con el estado, nunca por frame)."""
+    span = max(1e-6, hi - lo)
+    f0 = max(0.0, min(1.0, (tlo - lo) / span))
+    f1 = 1.0 if thi is None else max(0.0, min(1.0, (thi - lo) / span))
+    if f1 <= f0:
+        f1 = min(1.0, f0 + 0.012)
+    col = TGT_COL.get(status, TGT_COL[None])
+    n = max(2, int(math.ceil((f1 - f0) / 0.012)))
+    prev = None
+    for i in range(n + 1):
+        a = _dial(f0 + (f1 - f0) * i / n)
+        p = (math.cos(a) * r * 1.035, math.sin(a) * r * 1.035)
+        if prev:
+            mid = ((prev[0] + p[0]) / 2, (prev[1] + p[1]) / 2)
+            ln = math.hypot(p[0] - prev[0], p[1] - prev[1])
+            m.box(mid[0], mid[1], 0.075, ln + r * 0.02, r * 0.075, 0.05, col,
+                  yaw=math.atan2(p[1] - prev[1], p[0] - prev[0]), light=1.0)
+        prev = p
+
+
+def _target_dial(snap):
+    """("hr" | "w", objetivo) del bloque actual, o (None, None)."""
+    t = (snap.get("workout") or {}).get("target")
+    if not t or t.get("lo") is None:
+        return None, None
+    return ("w" if t.get("unit") == "w" else "hr"), t
+
+
+def _range_text(t) -> str:
+    unit = "W" if t["unit"] == "w" else "BPM"
+    if t.get("hi") is None:
+        return "%d+ %s" % (t["lo"], unit)
+    return "%d-%d %s" % (t["lo"], t["hi"], unit)
+
+
+def plan_hud(snap, anim, aspect, top=False):
+    """Tira del plan (nombre del bloque, cuenta atras, objetivo, siguiente y barra del plan) como
+    capa `hud_plan`; [] si no hay plan. Se reconstruye a 1 Hz con el snapshot: el destello del
+    cambio de bloque son los primeros 4 s con el fondo alternando cada segundo."""
+    w = snap.get("workout")
+    if not w:
+        return []
+    sig = (snap.get("version"), round(aspect, 3), top)
+    if anim.get("plan_sig") == sig:
+        return [("hud_plan", None)]
+    anim["plan_sig"] = sig
+    from .menuview import BAND_COLORS
+    from .workouts import band as _band
+    s = _hud_layout(aspect)[0]
+    m = Mesh()
+    m.panel(0.0, 1.0 - (0.115 if top else 0.285) * s)
+    done = bool(w.get("done"))
+    pct = int(w.get("pct") or 50)
+    bcol = BAND_COLORS[_band(pct)] if not done else GREEN
+    flash = (not done and int(w.get("i") or 0) > 0 and int(w.get("elapsed") or 0) < 4
+             and int(w.get("elapsed") or 0) % 2 == 0)
+    bg = tuple(0.55 * c for c in bcol) if flash else (0.07, 0.08, 0.10)
+    m.box(0.0, 0.0, 0.0, 1.50 * s, 0.17 * s, 0.01, bg, light=0.2)
+    m.box(-0.744 * s, 0.0, 0.0, 0.012 * s, 0.17 * s, 0.012, bcol, light=0.9)
+    z = 0.02
+    if done:
+        draw_text(m, 0.0, 0.035 * s, z, 0.040 * s, "PLAN COMPLETO", GREEN, light=0.95, align="c", depth=0)
+        draw_text(m, 0.0, -0.020 * s, z, 0.026 * s,
+                  "SESION LIBRE +" + _clock(w.get("over") or 0), INK, light=0.9, align="c", depth=0)
+    else:
+        name = str(w.get("bname") or "")[:15]
+        rep = str(w.get("rep") or "")
+        draw_text(m, -0.72 * s, 0.040 * s, z, 0.034 * s, (name + " " + rep).strip(), bcol,
+                  light=0.95, depth=0)
+        nx = w.get("next")
+        sub = ("SIGUE " + str(nx["name"])[:8].upper() + " " + _clock(nx["secs"])) if nx else "ULTIMO BLOQUE"
+        draw_text(m, -0.72 * s, -0.012 * s, z, 0.021 * s, sub, DIM, light=0.9, depth=0)
+        left = _clock(w.get("left") or 0)
+        h = 0.075 * s
+        draw_digits(m, -digits_w(left, h) / 2.0, 0.012 * s, 0.03, h, left, WHITE, light=0.95)
+        t = w.get("target")
+        if t and t.get("lo") is not None:
+            col = TGT_COL.get(t.get("status"), TGT_COL[None])
+            draw_text(m, 0.72 * s, 0.040 * s, z, 0.034 * s, _range_text(t), col, light=0.95, align="r", depth=0)
+            word = TGT_WORD.get(t.get("status"), "")
+            if word:
+                draw_text(m, 0.72 * s, -0.012 * s, z, 0.026 * s, word, col, light=0.95, align="r", depth=0)
+        else:
+            draw_text(m, 0.72 * s, 0.040 * s, z, 0.030 * s, "SIN OBJETIVO", DIM, light=0.9, align="r", depth=0)
+    # barra del plan: un tramo por bloque (ancho = duracion, color = banda) y el marcador del momento
+    prof = w.get("profile") or []
+    tot = sum(p[0] for p in prof) or 1
+    x0, wid, y = -0.70 * s, 1.40 * s, -0.064 * s
+    x = x0
+    for secs, pc in prof:
+        ww = wid * secs / tot
+        m.box(x + ww / 2.0, y, 0.004, max(0.002, ww - 0.003 * s), 0.016 * s, 0.01,
+              BAND_COLORS[_band(int(pc))], light=0.7)
+        x += ww
+    frac = min(1.0, float(w.get("progress") or 0.0))
+    m.box(x0 + wid * frac, y, 0.012, 0.007 * s, 0.032 * s, 0.012, WHITE, light=1.0)
+    return [("hud_plan", m)]
+
+
 class Cluster:
     """Arma el cluster en 3 capas: estatica (raro), valores (1 Hz) y agujas (por frame)."""
 
@@ -493,7 +602,7 @@ class Cluster:
         else:
             layers.append(("values", None))
         layers.append(("frame", self._frame(snap, anim, cfg)))
-        return layers, _cam(anim, aspect)
+        return layers, _cam(anim, aspect, bool(snap.get("workout")))
 
     # ---- estatica ----
     def _static(self, cfg):
@@ -519,11 +628,14 @@ class Cluster:
                 "v": float(snap.get("speed") or 0), "c": float(snap.get("cadence") or 0)}
         alarm = bool(snap.get("alarm"))
         avgs = {"v": float(snap.get("avg_speed") or 0), "c": float(snap.get("avg_cadence") or 0)}
+        tdial, tgt = _target_dial(snap)
         for which, cx, cz, r, _label, _unit in DIALS:
             one = Mesh()
             one.panel(cx, cz)
             dial_values(one, r, _digits_for(which, vals[which]),
                         alarm and which == "hr", avg=avgs.get(which))
+            if which == tdial:
+                dial_target(one, r, cfg[which][0], cfg[which][1], tgt["lo"], tgt["hi"], tgt.get("status"))
             m.merge(one)
         zc = _hex(snap.get("zone_color") or "#ef4444")
         sub = Mesh()
@@ -612,18 +724,18 @@ def _sweep(anim):
     return math.sin(t / 1.1 * math.pi)
 
 
-def _cam(anim, aspect):
+def _cam(anim, aspect, plan=False):
     """Framing por aspect (el cluster llena la ventana) con balanceo sutil ±6 grados.
 
     Casi de frente: con mucha pitch el panel se ve trapecio y los diales se aplastan.
     """
     fovy = 0.62
     tan = math.tan(fovy / 2.0)
-    d = max(HALF_Z / tan, HALF_X / (max(0.35, aspect) * tan)) * 1.10
+    d = max(HALF_Z / tan, HALF_X / (max(0.35, aspect) * tan)) * (1.24 if plan else 1.10)
     a = 0.062 * math.sin(anim["t"] * 0.70)                      # ±3.5 grados de balanceo
     pitch = 0.012 * math.sin(anim["t"] * 0.45)
     eye = (math.sin(a) * d, -math.cos(a) * d, (0.06 + pitch) * d)
-    return eye, (0.0, 0.0, -0.14), (0.0, 0.0, 1.0), fovy
+    return eye, (0.0, 0.0, -0.14 + (0.42 if plan else 0.0)), (0.0, 0.0, 1.0), fovy
 
 
 def _labels(m):
@@ -792,10 +904,13 @@ def hud_layers(snap, anim, aspect):
         vals = {"hr": float(snap.get("hr") or 0), "w": float(snap.get("watts") or 0),
                 "v": float(snap.get("speed") or 0), "c": float(snap.get("cadence") or 0)}
         alarm = bool(snap.get("alarm"))
+        tdial, tgt = _target_dial(snap)
         for which, (cx, cy, r, _l, _u) in lay.items():
             one = Mesh()
             one.panel(cx, cy)
             dial_values(one, r, _digits_for(which, vals[which]), alarm and which == "hr")
+            if which == tdial:
+                dial_target(one, r, cfg[which][0], cfg[which][1], tgt["lo"], tgt["hi"], tgt.get("status"))
             m.merge(one)
         dist_m = float(snap.get("dist_km") or 0) * 1000.0
         cells = (_clock(snap.get("elapsed_s") or 0), "%.2f" % (dist_m / 1000.0),
@@ -836,4 +951,4 @@ def hud_layers(snap, anim, aspect):
                    cache=anim.setdefault("tick_cache", {}))
         m.merge(one)
     out.append(("hud_frame", m))
-    return out
+    return out + plan_hud(snap, anim, aspect)

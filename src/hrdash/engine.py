@@ -292,6 +292,54 @@ class Engine:
                 "name": w.name if w else "Libre sin limite", "total_s": w.total_s if w else 0,
                 "lines": workouts.describe(w), "profile": workouts.profile(w)}
 
+    # ------------------------------------------------------------ plan en curso (fase 4)
+    def _plan_pos(self):
+        """Posicion del plan a los segundos de sesion que lleva (el mismo reloj que `Session`)."""
+        return self.workout.at(self.session.elapsed_s)
+
+    def block_label(self) -> str | None:
+        """"Esfuerzo 2/4" del bloque actual; "libre" si el plan ya termino; None sin plan."""
+        if self.workout is None or self.phase != "running":
+            return None
+        pos = self._plan_pos()
+        if pos.done:
+            return "libre"
+        b = pos.slot.block
+        rep = pos.slot.rep_label
+        return f"{b.name} {rep}".strip() if rep else b.name
+
+    def plan_info(self) -> dict | None:
+        """Lo que la ventana dibuja del plan (tira de bloque y arco objetivo); None sin plan.
+
+        Objetivo por potencia si hay lectura de rodillo y el bloque la define; si no, por FC
+        (`workouts.resolve_target`). `status` compara la lectura actual: low / ok / high.
+        Pasado el final, `done` (el plan avisa y la sesion sigue libre, sin tope)."""
+        w = self.workout
+        if w is None or self.phase != "running":
+            return None
+        pos = self._plan_pos()
+        info = {"name": w.name, "total": w.total_s, "left_total": pos.left_total,
+                "progress": round(pos.progress, 4), "done": pos.done,
+                "profile": workouts.profile(w), "n": len(w.slots()),
+                "t": int(self.session.elapsed_s)}
+        if pos.done:
+            info["over"] = max(0, int(self.session.elapsed_s) - w.total_s)
+            return info
+        slot, b = pos.slot, pos.slot.block
+        cfg = self.config
+        watts = getattr(self.tr, "watts", None) if self.tr else None
+        tgt = workouts.resolve_target(b, int(cfg.ftp), int(cfg.computed_hrmax()), watts is not None)
+        target = None
+        if tgt is not None:
+            val = watts if tgt.unit == "w" else getattr(self.hr, "latest_hr", None)
+            target = {"unit": tgt.unit, "lo": tgt.lo, "hi": tgt.hi, "status": tgt.status(val)}
+        nxt = pos.next
+        info.update({"i": slot.index, "bname": b.name, "kind": b.kind, "rep": slot.rep_label,
+                     "elapsed": pos.elapsed, "left": pos.left, "blen": b.secs, "target": target,
+                     "pct": workouts.intensity(b),
+                     "next": None if nxt is None else {"name": nxt.block.name, "secs": nxt.block.secs}})
+        return info
+
     def poll(self) -> tuple:
         """Un ciclo de 1 Hz: lee atributos, añade muestra y vuelta. (sample, closed).
 
@@ -308,7 +356,8 @@ class Engine:
         dist = getattr(self.tr, "dist_m", None) if self.tr else None
         if dist is not None:
             dist = max(0, int(dist) - self._dist0)
-        s = self.session.add(hr, watts=w, cadence=cad, speed_kmh=spd, dist_m=dist)
+        s = self.session.add(hr, watts=w, cadence=cad, speed_kmh=spd, dist_m=dist,
+                             bloque=self.block_label())
         return (s, self.laps.add(s))
 
     def snapshot(self, zoom_cmd=(0, 0)) -> dict:
@@ -320,7 +369,8 @@ class Engine:
                                    view=views[0] if views else "hr",
                                    views=views, zoom_cmd=zoom_cmd,
                                    standalone=True, phase=self.phase,
-                                   menu=self.menu_info() if menu else None)
+                                   menu=self.menu_info() if menu else None,
+                                   workout=self.plan_info())
 
     def handle_key(self, name: str) -> bool:
         """Tecla procesada por el motor en standalone. True si fue `q` (salir y grabar).
