@@ -23,8 +23,8 @@ Do not add pytest/ruff unless asked. The only automated assertion is `export.val
 .venv/bin/hrdash --simulate --duration 3 --export-dir /tmp/hrdash_check
 ```
 
-The TUI needs a TTY: `hrdash` exits 2 from a non-interactive shell, so visual layout changes
-cannot be verified headless. Use `--simulate` for hardware-free demo and `--probe 15 --trainer "TACX"`
+The TUI (`--ascii`) needs a TTY: it exits 2 from a non-interactive shell, so its layout
+cannot be verified headless. Plain `hrdash` opens the 3D window instead (no TTY needed). Use `--simulate` for hardware-free demo and `--probe 15 --trainer "TACX"`
 for real payload dumps.
 
 Isolate global state when running: every invocation writes `~/.config/hrdash/config.toml`
@@ -34,8 +34,10 @@ already saved.
 
 ## Architecture (what is not obvious from filenames)
 
-- `cli.py` forks into four paths: `--scan`, `--probe`, `--duration` (headless), TUI. The TUI path
-  also persists the last sensor/trainer on exit.
+- `cli.py` forks into five paths: `--scan`, `--probe`, `--duration` (headless), 3D standalone
+  (the default, also `--3d`) and TUI (`--ascii`). Without an explicit mode, if `gl_unavailable()`
+  reports missing GL packages or no display, it falls back to the TUI. The 3D and TUI paths
+  persist the last sensor/trainer on exit.
 - `ble.py` sources are async tasks; BLE notify callbacks **write plain attributes** (`latest_hr`,
   `watts`, `cadence`, `speed_kmh`, `dist_m`) that `ui.py` polls at 1 Hz in `tick()`. There is no
   event bus or callback into the UI: a new metric must be added as an attribute on the source **and**

@@ -7,16 +7,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The project guide above (`AGENTS.md`) is the canonical one: setup, the smoke test, BLE/FIT
 gotchas and conventions live there. What follows is what it does not cover yet.
 
-## Fifth CLI path: `--3d` standalone
+## Default mode: 3D standalone; `--ascii` for the TUI
 
-`AGENTS.md` describes four branches in `cli.main()`; there are five. `--3d` is in the same
-mutually exclusive argparse group as `--scan`, `--probe` and `--duration`: engine + GLFW
-window, no TUI. `--simulate` must stay **outside** that group so it can combine with
-`--duration` and `--3d` (it broke once; the smoke test catches it). `--3d-view VISTA`
-(repeatable, dest read with `getattr`) picks the initial views.
+Plain `hrdash` (or `--3d`) runs `cmd_3d`: engine + GLFW window, no TUI. `--ascii` is the
+Textual console. `--3d`, `--ascii`, `--scan`, `--probe` and `--duration` are one mutually
+exclusive argparse group; `--simulate` must stay **outside** it so it combines with any of
+them (it broke once; the smoke test catches it). `--3d-view VISTA` (repeatable, dest read
+with `getattr`, default `pista`) picks the initial views. Only the implicit default falls
+back to the TUI when `gl_unavailable()` says so; explicit `--3d` fails instead.
+
+`cmd_3d` must catch `asyncio.CancelledError` as well as `KeyboardInterrupt`: since Python
+3.11 `asyncio.run` turns Ctrl+C into a task cancellation, and without that the session was
+never exported.
 
 ```bash
-XDG_CONFIG_HOME=/tmp/hrdash_xdg .venv/bin/hrdash --simulate --3d --3d-view gauge   # needs the [gl] extra and a display
+XDG_CONFIG_HOME=/tmp/hrdash_xdg .venv/bin/hrdash --simulate --3d-view gauge   # needs the [gl] extra and a display
 ```
 
 ## Engine / protocol split
