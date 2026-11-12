@@ -325,3 +325,30 @@ donde no hay vsync, asi que lo del vsync se razona por el codigo y los conteos, 
 - Pendiente (no hecho): reutilizar buffers de GPU en vez de crear y liberar uno por capa y
   fotograma (~3 ms), y cachear la capa de la aguja cuando ya convergio.
 
+## Extra: textos de los diales centrados y sin solapes
+
+**Estado: hecho.** Afecta al tablero (`g`/`3`) y al HUD de la pista (mismos `dial_static` /
+`dial_values`).
+
+- **Centrado**: `draw_text` centraba con `text_w`, que incluye el hueco tras la ultima letra
+  (~0,2 h hacia la izquierda); ahora `align="c"/"r"` usa el trazo real (`ink_w`). Los digitos
+  se centran con `digits_extent`: en 7 segmentos un `1` solo pinta el lado derecho de su
+  celda, y centrar por celdas dejaba ~0,29 h de hueco en "148".
+- **Disposicion** (en unidades de radio): la lectura digital pasa de encima del eje (donde la
+  cruzaba la aguja y chocaba con los numeros) a la cuña libre de abajo, con la unidad y el
+  nombre/media apilados debajo. Cada texto se ajusta con `_fit` hasta caber en la cara
+  (`FACE` 0,93) y, si llega a la zona de palitos, dentro de la cuña (`WEDGE`, de -127 a -53
+  grados); se achica solo lo necesario (FRECUENCIA 0,08 -> 0,074).
+- **Numeros de la escala**: la caja entera (no solo el centro) debe caber dentro de los palitos
+  (`TICK_IN`) y se dejan `NUM_GAP` entre ellos; se mantiene la regla de multiplos (80/120/160,
+  100/200/300). Error mio corregido en el camino: proyectar solo en radial no basta, la esquina
+  lejana tiene componente perpendicular.
+- **Profundidad**: la lectura estaba a z = 0,22 y la perspectiva la corria hacia la unidad en
+  los diales de abajo; ahora z = 0,06 como el resto del texto.
+- `dial_values` pierde el parametro `dh` (el alto sale del layout).
+- Verificado con una auditoria fuera del repo (`audit.py`): 0 fallas en 10.620 numeros de
+  2.880 escalas, en todas las lecturas (0-259 ppm, 0-1599 W, 0-99,9 km/h, 0-259 rpm) y en
+  todas las filas de abajo; capturas con valores normales, en cero y maximos; HUD; app real
+  (Ctrl+C graba, 11/11); smoke FIT OK.
+- La unidad del dial de potencia pasa de `%FTP` a `WATTS` (el dial muestra watts; las bandas de color siguen siendo por %FTP), tambien en el HUD (antes `W`).
+
