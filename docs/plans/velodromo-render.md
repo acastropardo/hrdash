@@ -69,6 +69,28 @@ Captura lateral: se lee como un muneco de palos, no como un ciclista.
    de persecucion.
 5. Estela: o se quita, o pasa a ser una cinta fina pegada al tablon que se desvanece.
 
+**Estado: hecha.**
+
+- `ribbon()` suma `HALF_W` antes de llamar a `_surf`. Al corregirlo aparecio un segundo
+  defecto que el primero tapaba: la cinta base de 10 m se tuerce en la rampa de peralte
+  (quad no plano, la diagonal se separa cm de la superficie) y asomaba entre tablones y
+  lineas como un escalonado. La base ahora va partida por tablon (el ultimo recortado al
+  borde). Coste: 73k -> 107k tris estaticos (se suben una vez; la Fase 2 los elimina).
+- `_knee()` es una rotacion por `bend * a`; con `bend=-1` antes era una reflexion. Codo a
+  0,76 m (antes 1,36, por encima del casco), la rodilla no cambia.
+- `glfw.SAMPLES = 4` con `_mkwin()`, que repite sin multisample si el driver no lo da.
+- Meta: banda blanca de 0,72 m con linea negra de 4 cm; linea de 200 m; lineas rojas de
+  persecucion a mitad de cada recta (medio ancho). `_cross()` dibuja cualquier marca
+  transversal a `s` metros de meta y `_straight_mids()` localiza las rectas.
+- Estela: cinta de 4 cm sobre el tablon que empieza detras de la rueda trasera y se
+  desvanece.
+- Verificado: capturas antes/despues (chase recta y curva, lateral, lejana, meta, POV),
+  checks numericos (tablon >= DECK, base cubre 0..TRACK_W, codo bajo la recta
+  hombro-mano, centros de recta en 156 y 356 m), ventana GLFW real con MSAA bajo Xvfb
+  (`win` 1920x1080 sin `err`; ~22 fps con llvmpipe, igual que antes) y smoke FIT OK.
+- Sigue pendiente lo de la Fase 3: con el codo arreglado se ve mejor que las proporciones
+  (sillin bajo, torso corto, rodilla a la altura de la cadera) son el problema del ciclista.
+
 ### Fase 1 - geometria de un 250 m real
 
 - `track()` parametrizado: media recta 19 m, clotoide 13,5 m, arco 30 m (R ~ 23,4),

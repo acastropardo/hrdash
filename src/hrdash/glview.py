@@ -82,7 +82,8 @@ LINE_BLACK = (0.055, 0.055, 0.062)        # linea de referencia (datum), la mas 
 LINE_RED = (0.686, 0.157, 0.145)          # linea del sprinter (70 cm sobre la negra)
 LINE_BLUE = (0.231, 0.369, 0.545)         # linea del stayer (madison)
 LINE_WHITE = (0.827, 0.847, 0.871)        # borde exterior
-META = (0.900, 0.920, 0.950)              # meta cuadriculada, negro sobre blanco
+META = (0.900, 0.920, 0.950)              # banda de meta y linea de 200 m
+META_W, LINE_W = 0.72, 0.04               # banda de meta y lineas transversales (aprox. UCI)
 WALL = (0.451, 0.380, 0.227)              # madera del muro perimetral (#73613a en la foto)
 SEAT = (0.157, 0.196, 0.255)              # butacas
 SEAT_F = (0.118, 0.145, 0.185)            # escalon entre filas
@@ -120,8 +121,10 @@ LOOK_MAX_YAW, LOOK_MAX_TILT = math.pi, 0.45
 LOOK_MIN_H = 0.15                   # el ojo no puede quedar por debajo del tablon
 PRESS, RELEASE = 1, 0               # glfw.ACTION_PRESS / glfw.ACTION_RELEASE (no estan en el paquete)
 TRAIL_T = 1.2                       # segundos de estela (se desvanece, no persigue al rider parado)
+TRAIL_HW = 0.02                     # media anchura de la estela (4 cm, como una linea pintada)
 ZCOLORS = ["#6b7280", "#2f7bff", "#22c55e", "#facc15", "#f97316", "#ef4444"]
 
+MSAA = 4                            # muestras por pixel pedidas a GLFW
 A0, SWEEP = 225.0, 270.0            # barrido del dial (igual que gauges.py)
 
 
@@ -279,10 +282,13 @@ class Mesh:
         charco de luz bajo cada lampara, horneado por vertice porque el programa no tiene
         luces puntuales (coste solo de construccion, la capa se sube una vez).
         """
+        # `off` esta centrado en el eje (-HALF_W..HALF_W) y `_surf` mide desde el borde
+        # interior (0..TRACK_W): sin el `+ HALF_W` toda la madera salia 5 m hacia dentro, se
+        # hundia bajo el apron en las curvas y dejaba un hueco negro antes del muro.
         prev = None
         for pt in pts:
-            a_in, nrm, _ = _surf(pt, off - half, lift)
-            a_out, _, _ = _surf(pt, off + half, lift)
+            a_in, nrm, _ = _surf(pt, off - half + HALF_W, lift)
+            a_out, _, _ = _surf(pt, off + half + HALF_W, lift)
             if prev:
                 if tint is None:
                     self.quad(prev[0], prev[1], a_out, a_in, col, nrm, light)
@@ -595,10 +601,14 @@ def build_static(pts):
     # Tablon de pino: la junta va en el sentido de marcha, que es como se lee desde la chase.
     # Primero la base (mas oscura) y encima cada tablón algo mas claro, dejando 1 cm de junta:
     # sin esa junta la pista se lee como una superficie pintada a rayas, no como madera.
-    m.ribbon(pts, HALF_W, WOOD_D, tint=warm)
-    for i in range(int(TRACK_W / PLANK)):
-        m.ribbon(pts, PLANK / 2.0 - 0.012, WOODS[i % len(WOODS)],
-                 off=i * PLANK + PLANK / 2.0 - HALF_W, tint=warm, lift=0.004)
+    # La base va partida por tablon, no como una sola cinta de 10 m: en la rampa de peralte
+    # el quad de 10 m se tuerce entre muestras, su diagonal se separa varios cm de la
+    # superficie real y asomaba entre tablones y lineas como un escalonado.
+    for i in range(math.ceil(TRACK_W / PLANK)):
+        d0, d1 = i * PLANK, min(TRACK_W, (i + 1) * PLANK)    # el ultimo se recorta al borde
+        off, half = (d0 + d1) / 2.0 - HALF_W, (d1 - d0) / 2.0
+        m.ribbon(pts, half, WOOD_D, off=off, tint=warm)
+        m.ribbon(pts, half - 0.012, WOODS[i % len(WOODS)], off=off, tint=warm, lift=0.004)
 
     # Apron: el hormigon pintado del interior, en el nivel del tablon. No sigue el peralte
     # (es zona llana), por eso no se puede usar ribbon, que inclina con bank.
@@ -616,20 +626,48 @@ def build_static(pts):
                       (4.30, LINE_BLUE, 0.05), (TRACK_W - 0.05, LINE_WHITE, 0.05)):
         m.ribbon(pts, w / 2.0, col, off=d - HALF_W, light=0.14, tint=warm, lift=0.010)
 
-    # Meta cuadriculada, negra sobre blanco, atravesando la pista en el punto que cierra la vuelta.
-    for i in range(20):
-        d0 = i * TRACK_W / 20.0
-        d1 = d0 + TRACK_W / 20.0
-        a0, nrm, _ = _surf(pts[0], d0, 0.012)
-        a1, _, _ = _surf(pts[0], d1, 0.012)
-        b0, _, _ = _surf(pts[1], d0, 0.012)
-        b1, _, _ = _surf(pts[1], d1, 0.012)
-        m.quad(a0, a1, b1, b0, _warm(META if i % 2 == 0 else LINE_BLACK, warm(a0)), nrm, 0.22)
+    # Marcas transversales UCI. La meta no es un damero: es una banda blanca con una linea
+    # negra fina en el centro, en el punto que cierra la vuelta. La linea de 200 m (blanca)
+    # marca el tramo lanzado, y las de persecucion (rojas, medio ancho desde el borde
+    # interior) estan a mitad de cada recta.
+    _cross(m, pts, 0.0, META_W, META, 0.0, TRACK_W, warm, 0.012)
+    _cross(m, pts, 0.0, LINE_W, LINE_BLACK, 0.0, TRACK_W, warm, 0.014)
+    _cross(m, pts, -200.0, LINE_W, META, 0.0, TRACK_W, warm, 0.012)
+    for s_mid in _straight_mids(pts):
+        _cross(m, pts, s_mid, LINE_W, LINE_RED, 0.0, TRACK_W / 2.0, warm, 0.012)
 
     _structure(m, pts, warm)
     _stands(m, pts, warm)
     _roof(m, pts, lamps, warm)
     return m
+
+
+def _cross(m, pts, s, w, col, d0, d1, warm, lift) -> None:
+    """Banda transversal de ancho `w` (metros de avance) centrada en `s` metros desde meta,
+    de `d0` a `d1` medidos desde el borde interior. Sigue el peralte del punto, asi que en
+    curva tambien queda apoyada en el tablon."""
+    f0 = ((s - w / 2.0) / TRACK_LEN) % 1.0
+    f1 = ((s + w / 2.0) / TRACK_LEN) % 1.0
+    p0, p1 = _at(pts, f0), _at(pts, f1)
+    a0, nrm, _ = _surf(p0, d0, lift)
+    a1, _, _ = _surf(p0, d1, lift)
+    b0, _, _ = _surf(p1, d0, lift)
+    b1, _, _ = _surf(p1, d1, lift)
+    m.vquad(a0, a1, b1, b0, tuple(_warm(col, warm(q)) for q in (a0, a1, b1, b0)), nrm, 0.22)
+
+
+def _straight_mids(pts):
+    """Metros desde meta del centro de cada recta (tramos con tangente constante)."""
+    n = len(pts) - 1
+    runs, start = [], None
+    for i in range(n + 1):
+        straight = i < n and pts[i][4] == 0.0 and pts[i][2:4] == pts[(i + 1) % n][2:4]
+        if straight and start is None:
+            start = i
+        elif not straight and start is not None:
+            runs.append((start + i) / 2.0 * TRACK_LEN / n)
+            start = None
+    return runs
 
 
 def _structure(m, pts, warm) -> None:
@@ -737,7 +775,10 @@ def _knee(H, F, L1, L2, bend=1.0):
     ca = max(-1.0, min(1.0, (L1 * L1 + D * D - L2 * L2) / (2 * L1 * D)))
     sa = math.sqrt(max(0.0, 1.0 - ca * ca))
     us, uh = ds / D, dh / D
-    return (H[0] + L1 * (ca * us - bend * sa * uh), H[1] + L1 * (sa * us + bend * ca * uh))
+    # Rotacion de (us, uh) un angulo `bend * a`: antihoraria con bend=1, horaria con -1. La
+    # version anterior escalaba el coseno por `bend`, que con -1 es una reflexion y subia el
+    # codo por encima del casco.
+    return (H[0] + L1 * (ca * us - bend * sa * uh), H[1] + L1 * (bend * sa * us + ca * uh))
 
 
 
@@ -868,16 +909,21 @@ def scene_pista(snap, anim, aspect=1.6):
     # por detrás de un rider que ya esta quieto). Es una pegatina sobre el madera, no una
     # caja flotando 2 cm encima, que era lo que la hacía leer como basura.
     tr = anim["trail"]
+    # La cinta es fina (4 cm, como una linea pintada) y termina detras de la rueda trasera:
+    # los discos superpuestos de antes se leian como una mancha bajo la bici.
     if not tr or math.hypot(base[0] - tr[-1][1][0], base[1] - tr[-1][1][1]) >= 0.05:
-        tr.append((anim["t"], base))
+        tr.append((anim["t"], base, lat, up))
     while tr and (anim["t"] - tr[0][0] > TRAIL_T or len(tr) > 24):
         tr.pop(0)
-    for j, (tt, p) in enumerate(tr):
-        if j > len(tr) - 4:
-            continue                       # las muestras recientes caen justo bajo el rider
-        fade = max(0.12, 1.0 - (anim["t"] - tt) / TRAIL_T)
-        m.plate((p[0], p[1], p[2] + 0.006), 0.16, tuple(up),
-                tuple(c * (0.15 + 0.85 * fade) for c in col), 8, 0.30)
+    tail = [e for e in tr
+            if sum((e[1][j] - base[j]) * fwd[j] for j in range(3)) < REAR[0] - WR]
+    for (t0, p0, l0, u0), (t1, p1, l1, u1) in zip(tail, tail[1:]):
+        fade = max(0.0, 1.0 - (anim["t"] - t1) / TRAIL_T)
+        c = tuple(v * (0.25 + 0.75 * fade) for v in col)
+        q = [tuple(p[j] + u[j] * 0.006 + l[j] * k for j in range(3))
+             for p, l, u, k in ((p0, l0, u0, -TRAIL_HW), (p0, l0, u0, TRAIL_HW),
+                                (p1, l1, u1, TRAIL_HW), (p1, l1, u1, -TRAIL_HW))]
+        m.quad(*q, c, tuple(u1), 0.30 * fade)
 
     dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
     pov = dist < 0.5
@@ -1010,6 +1056,15 @@ def _window_for(glfw, mon, want=(1920, 1080)):
     return size, (_x, _y, int(wa), int(ha))
 
 
+def _mkwin(glfw, size, title, mon, share):
+    """`create_window` con MSAA y, si el driver no lo da, otra vez sin multisample."""
+    win = glfw.create_window(size[0], size[1], title, mon, share)
+    if win is None:
+        glfw.window_hint(glfw.SAMPLES, 0)
+        win = glfw.create_window(size[0], size[1], title, mon, share)
+    return win
+
+
 def _split_rect(view, i, n):
     """Rectangulo normalizado (x, y, w, h) para el split vertical: dashboard 40%, race 60%."""
     if n <= 1:
@@ -1101,6 +1156,9 @@ def child_main() -> None:
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE)
         glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
+        # 4x MSAA: sin el, radios, lineas pintadas y juntas del tablon serruchan. Si el driver
+        # no da un framebuffer multisample, `_mkwin` repite sin el (nunca tumba el hijo).
+        glfw.window_hint(glfw.SAMPLES, MSAA)
         mons = [m for m in (glfw.get_monitors() or []) if m]
         zoom = {}                      # vista -> distancia de camara (la rueda la cambia)
         look = {}                      # vista -> (yaw, tilt) de la orbita (el arrastre la mueve)
@@ -1306,8 +1364,8 @@ def child_main() -> None:
                         yield by_view[view]
                         continue
                     size, (xa, ya, wa, ha) = _window_for(glfw, mons[i], (1920, 1080))
-                    win = glfw.create_window(size[0], size[1], f"HRDash 3D - {view}",
-                                             mons[i], primary[0] if primary else None)
+                    win = _mkwin(glfw, size, f"HRDash 3D - {view}",
+                                 mons[i], primary[0] if primary else None)
                     if win is None:
                         raise RuntimeError("glfw no pudo crear la ventana")
                     try:                                   # centrada en el monitor que la aloja
@@ -1342,7 +1400,7 @@ def child_main() -> None:
 
             if primary is None:                            # ventana unica: se crea la primaria
                 size, mon = _plan_window(glfw, (1920, 1080))
-                win = glfw.create_window(size[0], size[1], "HRDash 3D", mon, None)
+                win = _mkwin(glfw, size, "HRDash 3D", mon, None)
                 if win is None:
                     raise RuntimeError("glfw no pudo crear la ventana")
                 if mon is not None:
