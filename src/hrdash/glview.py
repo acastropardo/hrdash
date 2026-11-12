@@ -372,9 +372,40 @@ def _upload(ctx, prog, mesh, np, moderngl):
     return va, prog
 
 
-def _draw(ctx, vaos, moderngl) -> None:
-    """Dibuja las capas en orden; las sombras con mezcla multiplicativa sobre lo ya pintado."""
-    for va in vaos.values():
+HUD_EYE = (0.0, -3.0, 0.0)               # camara del HUD: de frente al espacio panel
+
+
+def hud_cam(aspect):
+    """MVP ortografico del HUD: x en [-aspecto, aspecto], y en [-1, 1] (espacio panel)."""
+    import numpy as np
+    m = np.zeros((4, 4), dtype="f4")
+    near, far = 0.1, 10.0
+    m[0, 0], m[1, 1] = 1.0 / max(0.25, aspect), 1.0
+    m[2, 2], m[2, 3], m[3, 3] = -2.0 / (far - near), -(far + near) / (far - near), 1.0
+    return m @ look_at(HUD_EYE, (0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+
+
+def _set_cam(vas, np, mvp, eye) -> None:
+    """La misma camara para todos los programas de esas capas (general, cubierta, sombra)."""
+    for pr in {id(va.program): va.program for va in vas}.values():
+        pr["mvp"].write(np.ascontiguousarray(mvp.T, dtype="f4").tobytes())
+        try:
+            # EYE: el brillo y la niebla del pabellon se calculan desde la camara.
+            pr["EYE"].write(np.asarray(eye, dtype="f4").tobytes())
+        except Exception:  # noqa: BLE001 - program sin ese uniform (sombra)
+            pass
+
+
+def _draw(ctx, vaos, moderngl, np, mvp, eye, hud=None) -> None:
+    """Escena 3D y, encima, el HUD (capas `hud*`) si `hud` = (mvp, ojo).
+
+    La escena va en orden; las sombras con mezcla multiplicativa sobre lo ya pintado. Para el
+    HUD se borra solo la profundidad (con el color enmascarado, `clear` no toca la imagen):
+    asi queda siempre delante sin tapar el fondo, y entre sus piezas sigue habiendo z-buffer.
+    """
+    scene = [va for n, va in vaos.items() if not n.startswith("hud")]
+    _set_cam(scene, np, mvp, eye)
+    for va in scene:
         if _VA_FMT.get(id(va)) == "shadow":
             ctx.enable(moderngl.BLEND)
             ctx.blend_func = (moderngl.DST_COLOR, moderngl.ZERO)
@@ -382,6 +413,22 @@ def _draw(ctx, vaos, moderngl) -> None:
             ctx.disable(moderngl.BLEND)
         else:
             va.render(moderngl.TRIANGLES)
+    huds = [va for n, va in vaos.items() if n.startswith("hud")]
+    if hud is None or not huds:
+        return
+    # En moderngl la mascara de color solo llega a GL al enlazar el framebuffer (`use()`), y
+    # `use()` repone el viewport completo: en la ventana partida hay que restaurar el del slot.
+    fbo, vp, sc = ctx.fbo, ctx.viewport, ctx.scissor
+    fbo.color_mask = (False, False, False, False)
+    fbo.use()
+    ctx.viewport, ctx.scissor = vp, sc
+    ctx.clear(depth=1.0)
+    fbo.color_mask = (True, True, True, True)
+    fbo.use()
+    ctx.viewport, ctx.scissor = vp, sc
+    _set_cam(huds, np, hud[0], hud[1])
+    for va in huds:
+        va.render(moderngl.TRIANGLES)
 
 
 def _hex(col) -> tuple[float, float, float]:
@@ -1557,8 +1604,10 @@ def scene_pista(snap, anim, aspect=1.6):
     center = tuple(eye[j] + gaze[j] * ahead for j in range(3))
     if mode != "chase":
         eye, center, fovy = _cam_broadcast(mode, pts, anim["frac"], base, fwd, (nx, ny))
-    return layers + [("frame", m), ("rider", rider), ("shadow", sh)], \
-        (eye, center, (0.0, 0.0, 1.0), fovy, 300.0)
+    from .cluster import hud_layers               # lazy: cluster importa de aqui
+    hud_on = bool(anim.get("hud_on", True))
+    return layers + [("frame", m), ("rider", rider), ("shadow", sh)] + hud_layers(snap, anim, aspect), \
+        (eye, center, (0.0, 0.0, 1.0), fovy, 300.0, hud_on)
 
 
 def _at(pts, f):
@@ -1757,6 +1806,7 @@ def child_main() -> None:
         focus = {}                     # winkey(ventana) -> enfocada (sin foco no llegan teclas)
         nudge = None                   # nonce del ultimo paso de zoom que aplico el hijo
         cam_seen = None                # contador de `v` de la TUI ya aplicado
+        hud_seen = None                # contador de `i` de la TUI ya aplicado
         primary = None                 # (win, ctx, prog, size): la ventana que no se recrea
         by_view = {}                     # view -> slot: persiste entre cambios de vista
         multi_mode = None              # ventana por monitor; se decide con el primer layout
@@ -1768,7 +1818,7 @@ def child_main() -> None:
                     glfw.KEY_LEFT: "left", glfw.KEY_RIGHT: "right",
                     glfw.KEY_LEFT_BRACKET: "[", glfw.KEY_RIGHT_BRACKET: "]",
                     glfw.KEY_MINUS: "-", glfw.KEY_EQUAL: "+",     # `+` es KEY_EQUAL (sin shift)
-                    glfw.KEY_V: "v"}
+                    glfw.KEY_V: "v", glfw.KEY_I: "i"}
         slots: list = []
         # En standalone (`--3d`) no hay TUI: la ventana es la dueña de la vista y del zoom,
         # y solo reenvia al motor lo que afecta a la sesion (q/x/s). `standalone` y
@@ -1897,6 +1947,9 @@ def child_main() -> None:
             if name == "v":                  # camara de la pista: es estado de la ventana
                 cycle_cam()
                 return
+            if name == "i":                  # HUD de la pista: tambien estado de la ventana
+                toggle_hud()
+                return
             if standalone:
                 new = standalone_key(name, local_views)
                 if new is not None:
@@ -1914,6 +1967,14 @@ def child_main() -> None:
                 if s[0] == "pista":
                     s[5]["cam_mode"] = (int(s[5].get("cam_mode", 0)) + 1) % len(CAM_MODES)
                     _emit({"cam": CAM_MODES[s[5]["cam_mode"]]})
+                    return
+
+        def toggle_hud():
+            """Muestra u oculta los tacometros superpuestos a la vista pista."""
+            for s in slots:
+                if s[0] == "pista":
+                    s[5]["hud_on"] = not s[5].get("hud_on", True)
+                    _emit({"hud": s[5]["hud_on"]})
                     return
 
         def on_focus(win, focused):
@@ -2103,6 +2164,11 @@ def child_main() -> None:
                 if cam_seen is not None and cc != cam_seen:
                     cycle_cam()
                 cam_seen = cc
+            hc = snap.get("hud_cmd")                     # `i` en la TUI: igual que `v`
+            if isinstance(hc, int):
+                if hud_seen is not None and hc != hud_seen:
+                    toggle_hud()
+                hud_seen = hc
             if any(glfw.window_should_close(s[1]) for s in slots):
                 err = "ventana cerrada"
                 break
@@ -2129,16 +2195,8 @@ def child_main() -> None:
                 eye, center, up, fovy = cam[:4]
                 far = cam[4] if len(cam) > 4 else 80.0     # la pista necesita mas fondo
                 mvp = perspective(fovy, vw / vh, 0.1, far) @ look_at(eye, center, up)
-                # Cada VAO lleva su programa (el general o el de la cubierta): los dos reciben
-                # la misma camara.
-                for pr in {id(va.program): va.program for va in vaos.values()}.values() or [prog]:
-                    pr["mvp"].write(np.ascontiguousarray(mvp.T, dtype="f4").tobytes())
-                    try:
-                        # EYE: el brillo y la niebla del pabellon se calculan desde la camara.
-                        pr["EYE"].write(np.asarray(eye, dtype="f4").tobytes())
-                    except Exception:  # noqa: BLE001 - program sin ese uniform (shader antiguo)
-                        pass
-                _draw(ctx, vaos, moderngl)
+                hud = (hud_cam(vw / vh), HUD_EYE) if len(cam) > 5 and cam[5] else None
+                _draw(ctx, vaos, moderngl, np, mvp, eye, hud)
                 glfw.swap_buffers(win)
             glfw.poll_events()
             frames += 1

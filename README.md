@@ -61,6 +61,7 @@ Teclas dentro del dashboard:
 | `←` / `→` | navegar entre vistas: **FC → watts → tablero → pista** (la ayuda marca la activa) |
 | `[` / `]` | en la vista pista: recorre los largos de vuelta (1, 2, 3, **5**, 10, 20 km) |
 | `v` | en la ventana 3D de la pista: cambia la camara (persecucion, TV fija, grua) |
+| `i` | en la ventana 3D de la pista: muestra u oculta los tacometros (HUD de carreras) |
 
 ### Ventana 3D (`3`)
 

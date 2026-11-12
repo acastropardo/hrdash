@@ -60,7 +60,7 @@ def hints_text(view: str, note: str = "") -> Text:
             t.append(f"{VIEW_KEYS[v]} {VIEW_NAMES[v]}", style="bold #f8fafc")
         else:
             t.append(VIEW_KEYS[v], style="#9ca3af")
-    t.append(" · 3: dashboard · r: race (rueda: zoom, arrastre: orbita) · + -: zoom · v: camara · [ ]: largo vuelta",
+    t.append(" · 3: dashboard · r: race (rueda: zoom, arrastre: orbita) · + -: zoom · v: camara · i: tacometros · [ ]: largo vuelta",
              style="#6b7280")
     if note:
         t.append(f" · {note}", style="bold #f97316")
@@ -160,6 +160,7 @@ class HRDash(App):
         ("+", "zoom_view(1)", "Acercar camara 3D"),
         ("-", "zoom_view(-1)", "Alejar camara 3D"),
         ("v", "cam_view", "Camara de la pista 3D"),
+        ("i", "hud_view", "Tacometros sobre la pista 3D"),
     ]
 
     CSS = """
@@ -224,6 +225,7 @@ class HRDash(App):
         self._gl_focus: dict = {}   # vista -> ventana enfocada (sin foco no llegan teclas ni clics)
         self._gl_cmd: list = [0, 0]   # (nonce, delta) de zoom: el hijo lo aplica una sola vez
         self._cam_cmd = 0             # contador de `v`: el hijo pasa al siguiente modo de camara
+        self._hud_cmd = 0             # contador de `i`: el hijo muestra u oculta el HUD
         self._beat_t0 = time.time()
         self._beat_period = 1.0
         self._heart_lvl = -1      # ultimo nivel dibujado (evita redibujos)
@@ -334,6 +336,13 @@ class HRDash(App):
         self._cam_cmd += 1
         self._push_gl()
 
+    def action_hud_view(self) -> None:
+        """`i`: muestra u oculta los tacometros superpuestos a la pista 3D (estado del hijo)."""
+        if not self.gl or self._glhost is None:
+            return
+        self._hud_cmd += 1
+        self._push_gl()
+
     def action_zoom_view(self, delta: int) -> None:
         """`+` y `-`: acercan o alejan la camara de la vista 3D (la rueda hace lo mismo).
 
@@ -439,7 +448,7 @@ class HRDash(App):
                                     self.hr, self.tr,
                                     view=self.view, views=self.gl_views,
                                     zoom_cmd=self._gl_cmd, standalone=False,
-                                    cam_cmd=self._cam_cmd)
+                                    cam_cmd=self._cam_cmd, hud_cmd=self._hud_cmd)
 
     def _push_gl(self) -> None:
         if not (self.gl and self._glhost is not None):

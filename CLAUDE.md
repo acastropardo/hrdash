@@ -50,7 +50,11 @@ wood, general program). Lighting is shared through the `SHADE` GLSL snippet. Cus
 formats live in `FORMATS` (`deck`, and `shadow`, drawn by `_draw()` with multiplicative
 blending); add a new one there rather than special-casing the render loop. Camera modes
 (`CAM_MODES`, key `v`) are child-process state: the TUI only sends a changing `cam_cmd`
-counter, like `zoom_cmd`. Plans and
+counter, like `zoom_cmd`. The pista also returns `hud*` layers (`cluster.hud_layers`, the same
+dials as the gauge cluster) that `_draw()` renders in a second, orthographic pass after
+clearing only depth; the camera tuple carries a 6th field (HUD visible, key `i`/`hud_cmd`).
+In moderngl 5.13 `fbo.color_mask` only reaches GL on `fbo.use()`, which resets the viewport:
+restore viewport and scissor after it. Plans and
 offscreen-render checks for this work are in `docs/plans/velodromo-render.md`.
 
 ## Other drawing modules
