@@ -49,9 +49,13 @@ hrdash --duration 30      # modo headless: 30 s de muestreo + grabación (para s
 hrdash --fresh            # vuelve a preguntar aunque haya config guardada
 ```
 
-Por defecto `hrdash` abre la **ventana 3D sin consola**, primero en un **menu**: las fuentes
-conectan y muestran su valor en vivo, pero **no se graba nada hasta pulsar INICIAR** (clic, Enter o
-Espacio; `q` o Esc salen sin grabar). Con `--now` se salta el menu. Una vez iniciado, el motor muestrea y graba igual,
+Por defecto `hrdash` abre la **ventana 3D sin consola**, primero en un **menu** donde se eligen los
+sensores: `B` (o el boton BUSCAR) escanea y lista bandas de FC y rodillos con su senal; con las
+flechas/Tab y Enter, o con el raton, se asigna cada uno (una banda va a FC, un rodillo al rodillo),
+QUITAR deja la sesion sin rodillo, y la fila SIMULADOR permite probar sin hardware. Las fuentes
+muestran su valor en vivo, pero **no se graba nada hasta pulsar INICIAR** (clic, Enter o Espacio;
+hace falta una FC en vivo; `q` o Esc salen sin grabar). Lo elegido se recuerda para la proxima vez.
+Con `--now` se salta el menu. Una vez iniciado, el motor muestrea y graba igual,
 la terminal solo muestra una linea de estado y el resumen al salir (`q` en la ventana o
 Ctrl+C en la terminal graban FIT + CSV). Tras el menu arranca en los tacometros; dentro de la ventana
 `←`/`→` rotan entre vistas (FC → watts → tacometros → pista) y `h`/`w`/`g`/`p` saltan a

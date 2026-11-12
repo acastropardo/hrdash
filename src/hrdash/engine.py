@@ -25,10 +25,26 @@ from .laps import LapTracker
 SCENES_VIEWS = ("hr", "watts", "gauge", "pista")
 
 
-class Engine:
-    """Dueño del estado de la sesion para cualquier frontend (TUI, headless, ventana 3D)."""
+MAX_DEVICES = 7                     # filas de dispositivos en el menu (mas la fila del simulador)
+SCAN_SECS = 6.5
 
-    def __init__(self, hr_source, tr_source, config: Config, menu: bool = False):
+
+async def _default_scanner(timeout: float, fresh: bool = True) -> list:
+    from dataclasses import asdict
+    from .ble import scan_devices
+    return [asdict(f) for f in await scan_devices(timeout, fresh)]
+
+
+class Engine:
+    """Dueño del estado de la sesion para cualquier frontend (TUI, headless, ventana 3D).
+
+    Cada fuente (banda de FC, rodillo) corre en su propia tarea con su propio evento de parada,
+    asi el menu puede cambiar una sin tocar la otra. `scanner(timeout, fresh)` y
+    `factory(slot, dev)` son inyectables: el menu se prueba sin Bluetooth.
+    """
+
+    def __init__(self, hr_source, tr_source, config: Config, menu: bool = False,
+                 scanner=None, factory=None):
         self.hr = hr_source
         self.tr = tr_source
         self.config = config
@@ -39,15 +55,159 @@ class Engine:
         # Sin menu (`--now`, headless) arranca ya en "running", como siempre.
         self.phase = "menu" if menu else "running"
         self._dist0 = 0                     # distancia del rodillo al empezar la sesion
-        self._stop = asyncio.Event()
-        self._tasks: list = []
+        self.scanner = scanner or _default_scanner
+        self.factory = factory or self._default_factory
+        self.devices: list[dict] = []       # ultimo escaneo, ya recortado y ordenado
+        self.scan: dict = {"state": "idle", "msg": "", "n": 0}
+        self._scan_task = None
+        self._runs: dict = {}               # id(fuente) -> (fuente, evento de parada, tarea)
+        self.trainer_pref: bool | None = None   # el usuario quito (False) o eligio (True) rodillo
+
+    # ------------------------------------------------------------ fuentes
+    def _default_factory(self, slot: str, dev):
+        """Fuente nueva para una eleccion del menu (`slot` = "hr" | "trainer" | "both")."""
+        from .ble import SensorSource, SimSensor, TrainerSource
+        if slot == "both" or not dev or dev.get("sim"):
+            return SimSensor()
+        if slot == "hr":
+            src = SensorSource(dev["address"])
+        else:
+            src = TrainerSource(dev["address"], wheel_mm=self.config.wheel_mm)
+        src.name = dev.get("name") or dev["address"]
+        src.address = dev["address"]
+        return src
+
+    def _ensure_running(self, src) -> None:
+        """Arranca la tarea de una fuente si no corre ya (con el simulador compartido por las dos
+        ranuras corre UNA vez: dos tareas sobre el mismo objeto duplicaban su distancia)."""
+        if src is None or id(src) in self._runs:
+            return
+        ev = asyncio.Event()
+        self._runs[id(src)] = (src, ev, asyncio.create_task(src.run(ev)))
+
+    async def _release_unused(self, everything: bool = False) -> None:
+        """Para las fuentes que ya no estan asignadas a ninguna ranura (todas con `everything`)."""
+        for key, (src, ev, task) in list(self._runs.items()):
+            if not everything and (src is self.hr or src is self.tr):
+                continue
+            del self._runs[key]
+            ev.set()
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+
+    def start(self) -> None:
+        """Arranca las fuentes como tareas async (los callbacks escriben atributos planos)."""
+        self._ensure_running(self.hr)
+        self._ensure_running(self.tr)
+
+    async def stop(self) -> None:
+        self._cancel_scan()
+        task, self._scan_task = self._scan_task, None
+        if task is not None:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        await self._release_unused(everything=True)    # las ranuras se conservan: export y persist
 
     def _trainer_dist(self) -> int:
         return int(getattr(self.tr, "dist_m", None) or 0) if self.tr else 0
 
+    # ------------------------------------------------------------ menu: escaneo
+    def request_scan(self, fresh: bool = True) -> bool:
+        """Lanza un escaneo en segundo plano; False si ya hay uno en curso (no se encolan)."""
+        if self.phase != "menu" or (self._scan_task is not None and not self._scan_task.done()):
+            return False
+        self.scan = {"state": "scanning", "msg": "", "n": 0}
+        self._scan_task = asyncio.create_task(self._scan(fresh))
+        return True
+
+    def _cancel_scan(self) -> None:
+        if self._scan_task is not None and not self._scan_task.done():
+            self._scan_task.cancel()
+
+    async def _scan(self, fresh: bool) -> None:
+        try:
+            found = await self.scanner(SCAN_SECS, fresh)
+            devs = []
+            for f in (found or []):
+                d = dict(f) if isinstance(f, dict) else dict(vars(f))
+                if d.get("address") and d.get("kind") in ("hr", "trainer"):
+                    d["rssi"] = int(d.get("rssi", -100))
+                    devs.append(d)
+            devs.sort(key=lambda d: (d["kind"] != "hr", -d["rssi"]))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - sin Bluetooth/permiso o respuesta rara: se muestra
+            from .ble import describe_scan_error
+            self.scan = {"state": "error", "msg": describe_scan_error(exc), "n": 0}
+            return
+        self.devices = devs[:MAX_DEVICES]
+        self.scan = {"state": "done", "msg": "", "n": len(devs)}
+
+    # ------------------------------------------------------------ menu: asignacion
+    async def _set_slots(self, hr=None, tr=None, keep_hr=True, keep_tr=True) -> None:
+        if not keep_hr:
+            self.hr = hr
+        if not keep_tr:
+            self.tr = tr
+        self._ensure_running(self.hr)
+        self._ensure_running(self.tr)
+        await self._release_unused()
+
+    async def assign_device(self, dev_id: str) -> bool:
+        """Asigna un dispositivo de la ultima lista: las bandas a FC, los rodillos al rodillo."""
+        dev = next((d for d in self.devices if d["address"] == dev_id), None)
+        if dev is None:
+            return False
+        if dev["kind"] == "hr":
+            if getattr(self.hr, "address", None) == dev_id:
+                return False
+            await self._set_slots(hr=self.factory("hr", dev), keep_hr=False)
+        else:
+            if getattr(self.tr, "address", None) == dev_id:
+                return False
+            await self._set_slots(tr=self.factory("trainer", dev), keep_tr=False)
+            self.trainer_pref = True
+        return True
+
+    async def assign_sim(self) -> bool:
+        """El simulador (FC + rodillo) en las dos ranuras, para probar sin hardware."""
+        if self.hr is self.tr and getattr(self.hr, "is_sim", False):
+            return False
+        sim = self.factory("both", None)
+        await self._set_slots(hr=sim, tr=sim, keep_hr=False, keep_tr=False)
+        return True
+
+    async def remove_trainer(self) -> bool:
+        if self.tr is None:
+            return False
+        await self._set_slots(tr=None, keep_tr=False)
+        self.trainer_pref = False
+        return True
+
+    def play_state(self) -> tuple:
+        """(puede iniciar, motivo): hace falta una FC en vivo, porque sin ella no se anota nada."""
+        hr = self.hr
+        if hr is None:
+            return False, "ELIGE UNA BANDA DE FC"
+        if getattr(hr, "latest_hr", None) is not None:
+            return True, ""
+        if getattr(hr, "connected", False):
+            return False, "ESPERANDO FC: PONTE LA BANDA"
+        from .ble import friendly_error
+        err = str(getattr(hr, "error", "") or "").strip()
+        return False, ("FC: " + (friendly_error(err) or err.upper())[:34]) if err else \
+            "CONECTANDO CON LA BANDA..."
+
+    # ------------------------------------------------------------ fase
     def begin(self) -> None:
         """Pasa de menu a rodando: sesion y vueltas nuevas, simulador reiniciado y la distancia
         del rodillo (que corre desde que se conecto) vuelve a cero."""
+        self._cancel_scan()                 # escanear mientras se rueda estorba a las conexiones
         self.session.reset()
         self.laps.reset()
         for src in (self.hr, self.tr):
@@ -56,44 +216,57 @@ class Engine:
         self._dist0 = self._trainer_dist()
         self.phase = "running"
 
-    def handle_ui(self, ui) -> bool:
-        """Evento de la interfaz de la ventana (`{"act": ...}`). True si cambio el estado y
-        conviene mandar un snapshot ya."""
+    async def handle_ui(self, ui) -> bool:
+        """Evento de la interfaz de la ventana (`{"act": id}`). True si cambio algo y conviene
+        mandar un snapshot ya. Solo actua en fase menu."""
         act = ui.get("act") if isinstance(ui, dict) else None
-        if act == "play" and self.phase == "menu":
+        if not isinstance(act, str) or self.phase != "menu":
+            return False
+        if act == "play":
+            if not self.play_state()[0]:
+                return False                # sin FC no se inicia (el menu lo muestra)
             self.begin()
             return True
+        if act == "scan":
+            return self.request_scan(fresh=True)
+        if act == "sim":
+            return await self.assign_sim()
+        if act == "notrainer":
+            return await self.remove_trainer()
+        if act.startswith("dev:"):
+            return await self.assign_device(act[4:])
         return False
 
     def menu_info(self) -> dict:
-        """Lo que muestra el menu de cada fuente (nombre, estado y lectura en vivo)."""
+        """Todo lo que dibuja el menu: las dos ranuras (estado y lectura en vivo), los dispositivos
+        del ultimo escaneo con su uso actual, el estado del escaneo y si se puede iniciar."""
         def src(s, fields):
             if s is None:
                 return None
+            from .ble import friendly_error
+            err = str(getattr(s, "error", "") or "")
             d = {"name": str(getattr(s, "name", "") or ""), "connected": bool(getattr(s, "connected", False)),
-                 "error": str(getattr(s, "error", "") or "")}
+                 "error": friendly_error(err) or err, "sim": bool(getattr(s, "is_sim", False))}
             for k, attr in fields:
                 v = getattr(s, attr, None)
                 d[k] = None if v is None else (round(float(v), 1) if isinstance(v, float) else int(v))
             return d
+
+        def use(d):
+            for slot, s in (("hr", self.hr), ("trainer", self.tr)):
+                if s is not None and getattr(s, "address", None) == d["address"]:
+                    return slot
+            return None
+
+        ok, why = self.play_state()
         return {"hr": src(self.hr, (("hr", "latest_hr"),)),
-                "trainer": src(self.tr, (("watts", "watts"), ("cadence", "cadence"), ("speed", "speed_kmh")))}
-
-    def start(self) -> None:
-        """Arranca las fuentes como tareas async (los callbacks escriben atributos planos)."""
-        self._tasks = [asyncio.create_task(self.hr.run(self._stop))]
-        if self.tr is not None:
-            self._tasks.append(asyncio.create_task(self.tr.run(self._stop)))
-
-    async def stop(self) -> None:
-        self._stop.set()
-        for t in self._tasks:
-            t.cancel()
-        for t in self._tasks:
-            try:
-                await t
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+                "trainer": src(self.tr, (("watts", "watts"), ("cadence", "cadence"), ("speed", "speed_kmh"))),
+                "devices": [{"id": d["address"], "name": str(d.get("name") or ""), "rssi": int(d.get("rssi", -100)),
+                             "kind": d["kind"], "caps": list(d.get("caps") or []), "use": use(d)}
+                            for d in self.devices],
+                "scan": dict(self.scan),
+                "sim": self.hr is self.tr and bool(getattr(self.hr, "is_sim", False)),
+                "can_play": ok, "hint": why}
 
     def poll(self) -> tuple:
         """Un ciclo de 1 Hz: lee atributos, añade muestra y vuelta. (sample, closed).

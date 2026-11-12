@@ -1831,7 +1831,12 @@ def child_main() -> None:
                     glfw.KEY_MINUS: "-", glfw.KEY_EQUAL: "+",     # `+` es KEY_EQUAL (sin shift)
                     glfw.KEY_V: "v", glfw.KEY_I: "i",
                     glfw.KEY_ENTER: "enter", glfw.KEY_KP_ENTER: "enter",
-                    glfw.KEY_SPACE: "space", glfw.KEY_ESCAPE: "escape"}
+                    glfw.KEY_SPACE: "space", glfw.KEY_ESCAPE: "escape",
+                    glfw.KEY_UP: "up", glfw.KEY_DOWN: "down", glfw.KEY_TAB: "tab",
+                    glfw.KEY_B: "b"}
+        # Teclas que solo significan algo en el menu: fuera de el no se reenvian a la TUI (con
+        # `simulate_key` un Tab o un Enter moverian el foco de la consola).
+        MENU_ONLY = ("enter", "space", "escape", "up", "down", "tab", "b")
         slots: list = []
         # En standalone (`--3d`) no hay TUI: la ventana es la dueña de la vista y del zoom,
         # y solo reenvia al motor lo que afecta a la sesion (q/x/s). `standalone` y
@@ -1933,12 +1938,16 @@ def child_main() -> None:
             que hay que clicar una vez y despues arrastrar. Con el touchpad el arrastre de un dedo
             tambien llega por aqui: el trackpad actua como raton con boton.
             """
-            if phase == "menu":                  # hover: el cursor en fraccion de ventana
-                s = slot_under(win)
+            if phase == "menu":                  # el cursor mueve el foco al pasar por un widget
                 try:
+                    from .menuview import hit_id
                     wpts, hpts = glfw.get_window_size(win)
-                    if s is not None and wpts and hpts:
-                        s[5]["mouse_n"] = (x / float(wpts), 1.0 - y / float(hpts))
+                    got = menu_slot(win)
+                    if got is not None and wpts and hpts:
+                        wid = hit_id(snap.get("menu"), (x / float(wpts), 1.0 - y / float(hpts)),
+                                     wpts / float(hpts))
+                        if wid:
+                            got[0]["menu_focus"] = wid
                 except Exception:  # noqa: BLE001 - ventana cerrada durante el movimiento
                     pass
                 return
@@ -1961,6 +1970,9 @@ def child_main() -> None:
                     except Exception:  # noqa: BLE001 - ventana cerrada durante el clic
                         wid = None
                     if wid:
+                        got = menu_slot(win)
+                        if got is not None:
+                            got[0]["menu_focus"] = wid
                         _emit({"ui": {"act": wid}})
                 return
             if action == PRESS:
@@ -1993,10 +2005,7 @@ def child_main() -> None:
             if not name:
                 return
             if phase == "menu":
-                if name in ("enter", "space"):
-                    _emit({"ui": {"act": "play"}})
-                elif name in ("q", "escape"):
-                    _emit({"key": "q"})          # salir del menu sin grabar nada
+                menu_key(win, name)
                 return
             if name == "v":                  # camara de la pista: es estado de la ventana
                 cycle_cam()
@@ -2013,7 +2022,43 @@ def child_main() -> None:
                     add_zoom(next((s for s in slots if s[0] in ZOOMABLE), None),
                              STEP_ZOOM * (1 if name == "+" else -1))
                     return
+            if name in MENU_ONLY:
+                return                       # solo tienen sentido en el menu
             _emit({"key": name})
+
+        def menu_slot(win):
+            """(anim, widgets, aspecto) del menu en esta ventana, o None si no hay."""
+            from .menuview import menu_widgets
+            s = next((x for x in slots if x[0] == "menu"), None)
+            wpts, hpts = glfw.get_window_size(win)
+            if s is None or not wpts or not hpts:
+                return None
+            aspect = wpts / float(hpts)
+            return s[5], menu_widgets(snap.get("menu"), aspect), aspect
+
+        def menu_key(win, name):
+            """Teclado del menu: flechas/Tab mueven el foco, Enter/Espacio lo activan, B busca,
+            Q/Esc salen sin grabar. El foco inicial es INICIAR."""
+            from .menuview import activate, focus_or_default, move_focus
+            if name in ("q", "escape"):
+                _emit({"key": "q"})              # salir del menu sin grabar nada
+                return
+            if name == "b":
+                _emit({"ui": {"act": "scan"}})
+                return
+            got = menu_slot(win)
+            if got is None:
+                return
+            anim, widgets, _a = got
+            cur = focus_or_default(widgets, anim.get("menu_focus"))
+            if name in ("down", "tab"):
+                anim["menu_focus"] = move_focus(widgets, cur, 1)
+            elif name == "up":
+                anim["menu_focus"] = move_focus(widgets, cur, -1)
+            elif name in ("enter", "space"):
+                act = activate(widgets, cur)
+                if act:
+                    _emit({"ui": {"act": act}})
 
         def cycle_cam():
             """Siguiente modo de camara (chase / tv / grua) en la vista pista."""

@@ -124,7 +124,8 @@ scripts, `--simulate` y pruebas); `--duration` y `--ascii` no cambian.
    `phase`, escena con titulo y boton Play (raton y Enter) y evento `ui`. Al pulsar Play arranca
    la sesion. Harness: pulsaciones y clics reales en Xvfb (XTest). **Hecha**, ver "Estado de la
    fase 1".
-2. **Sensores**: escaneo, lista, asignacion, conexion y valores en vivo, persistencia.
+2. **Sensores**: escaneo, lista, asignacion, conexion y valores en vivo, persistencia. **Hecha**,
+   ver "Estado de la fase 2".
 3. **Sesion**: minutos, presets y editor de intervalos en el menu.
 4. **Plan en ejecucion**: runner, tira de bloque en el HUD, arco objetivo en los diales,
    avisos; columna `bloque` en el CSV.
@@ -232,4 +233,64 @@ teclado y raton inyectados.
   sin exportar); `workouts_check`, auditoria de dials, escenas y smoke FIT sin cambios.
 - Pendiente de confirmar en el Mac: foco y clic reales (GLFW no entrega botones a una ventana sin
   foco) y el tamano del boton con HiDPI.
+
+## Estado de la fase 2 (hecha)
+
+Menu con lista de dispositivos, asignacion de banda y rodillo, valores en vivo y persistencia.
+
+- **Escaneo** (`ble.py`): `scan_devices(timeout, fresh)` devuelve `Found(name, address, rssi, kind,
+  caps)` clasificados con `classify`. Usa `return_adv=True`: **bleak 3.x ya no tiene
+  `BLEDevice.metadata`**, asi que el codigo anterior solo clasificaba por nombre y nunca por
+  servicios (180D/1818/1826); ahora tambien por servicios anunciados, y se ve la senal. Los escaneos
+  se serializan con un candado por bucle (BlueZ no admite dos a la vez: compiten las dos fuentes y
+  el menu) y un escaneo de menos de 5 s se reutiliza, salvo `fresh=True` (boton Buscar); un error no
+  se cachea. `scan_all` se conserva encima (lo usan las fuentes y `--scan`, que ahora imprime la
+  senal y da un motivo en vez de un traceback sin Bluetooth). `describe_scan_error` /
+  `friendly_error` traducen los fallos a un texto corto ("BLUETOOTH NO DISPONIBLE", "APAGADO",
+  "SIN PERMISO...").
+- **Motor** (`engine.py`): cada fuente corre en su propia tarea con su propio evento de parada
+  (`_runs`), asi se cambia una sin tocar la otra y se cancela la sustituida. Con el simulador
+  compartido por las dos ranuras corre UNA vez (antes dos tareas sobre el mismo objeto: distancia
+  x1,66 en el simulador). `request_scan` (no se encolan), `assign_device`, `assign_sim`,
+  `remove_trainer`, `play_state` (INICIAR exige una FC en vivo: sin ella no se anota nada) y
+  `handle_ui` async. `scanner` y `factory` son inyectables. `stop()` conserva las ranuras (export y
+  persistencia las leen). El escaneo procesa la respuesta dentro del `try`: antes, una respuesta
+  inesperada dejaba el menu en "BUSCANDO..." para siempre.
+- **Menu** (`menuview.py`): lienzo fijo de 1,78 x 1 escalado a la ventana; lista (fila SIMULADOR +
+  hasta 7 dispositivos con tipo, servicios, barras de senal y "EN USO"), dos tarjetas con estado y
+  lectura en vivo, BUSCAR, QUITAR (rodillo) e INICIAR. Interaccion por FOCO: flechas/Tab, Enter o
+  Espacio activan, `B` busca, el raton mueve el foco y el clic activa; el foco inicial es INICIAR
+  (si esta apagado, el primer widget habilitado). Un widget deshabilitado no recibe foco ni clic.
+  Cuatro capas segun lo que cambia (`hud_static`, `hud_list`, `hud_values`, `hud_frame`); el texto
+  del menu es plano (`draw_text(depth=0)`), 8 veces mas barato que en cajas. La fuente gana `+ _ ' ?
+  ! = # & * < > [ ]` (antes "Rhythm+" se dibujaba sin el signo); los nombres se normalizan
+  (`font_text`: sin acentos, `?` para lo que la fuente no tiene) y se recortan al ancho real.
+- **Ventana** (`glview.py`): teclas `up/down/tab/b`; fuera del menu esas teclas ya no se
+  reenvian a la TUI (con `simulate_key` un Tab o un Enter movian el foco de la consola; ya pasaba
+  con `enter/space/escape` desde la fase 1).
+- **Persistencia** (`cli.py`, `config.py`): `last_device`/`last_trainer` guardan la direccion si
+  se eligio por direccion (distingue dos dispositivos con el mismo nombre) y si no el nombre; nueva
+  clave `use_trainer` (`false` solo cuando el usuario pulso QUITAR; elegir un rodillo la
+  restablece). El simulador nunca se guarda. **Error previo corregido**: `cmd_3d` guardaba DESPUES de
+  `eng.stop()`, cuando las fuentes ya estaban desconectadas, asi que en modo 3D el ultimo sensor no
+  se guardaba nunca; ahora se guarda en el `finally`, antes de parar.
+- **`--simulate`**: abre con el simulador en las dos ranuras (INICIAR habilitado ya) y el escaneo
+  devuelve una banda y un rodillo de demostracion que se pueden asignar (`sim_scan`,
+  `sim_factory`). Sin `--simulate`, la fila SIMULADOR permite probar sin hardware.
+- **Harnesses** (fuera del repo): `menu_audit.py` (256 widgets en 8 formas de ventana y 5 estados:
+  dentro de pantalla, sin solapes, clic en el centro de cada uno, foco que recorre todo y vuelve,
+  nunca cae en un deshabilitado, fuente sin caracteres fuera de rango); `engine_check.py` (asignar,
+  reasignar, descartar basura, cancelacion de la fuente sustituida, simulador una vez, `begin`
+  cancela el escaneo, `stop` sin tareas colgadas, errores y respuestas raras del escaner, y
+  `scan_devices` con un `BleakScanner` falso: 5 llamadas simultaneas -> 1 real, TTL, `fresh`, error
+  no cacheado); `phase2_run.py` + `phase2_drive.sh` (motor y ventana reales con un escaner y unas
+  fuentes falsas, y teclas y raton fisicos por XTest: INICIAR apagado sin FC y el clic no hace
+  nada, `B` dos veces = un escaneo, asignar por teclado y por clic, cambiar de banda, quitar el
+  rodillo, iniciar; el informe comprueba 2 escaneos, 1 simultaneo, todas las fuentes sustituidas
+  canceladas, `last_device`/`use_trainer` guardados y un CSV solo posterior a INICIAR); y los
+  escenarios de la fase 1 (teclas, clic, Espacio, `q`, Esc, `--now`), sin cambios.
+- No hecho / limites: no se muestran dispositivos que no anuncien ni un nombre reconocible ni un
+  servicio conocido (no hay "mostrar todos"); la lista no desplaza (7 dispositivos); sin Bluetooth
+  real no se pudo probar la conexion de verdad (solo escaneo y fuentes falsas); y en macOS, el clic
+  con la ventana recien abierta y el tamano con HiDPI siguen por confirmar.
 

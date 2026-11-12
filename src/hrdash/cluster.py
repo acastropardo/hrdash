@@ -71,6 +71,20 @@ FONT = {
     "(": ("00110", "01000", "10000", "10000", "10000", "01000", "00110"),
     ")": ("01100", "00010", "00001", "00001", "00001", "00010", "01100"),
     " ": ("00000", "00000", "00000", "00000", "00000", "00000", "00000"),
+    # simbolos habituales en nombres de dispositivos ("Rhythm+", "KICKR_1234", "H10 #2")
+    "+": ("00000", "00100", "00100", "11111", "00100", "00100", "00000"),
+    "_": ("00000", "00000", "00000", "00000", "00000", "00000", "11111"),
+    "'": ("00100", "00100", "01000", "00000", "00000", "00000", "00000"),
+    "?": ("01110", "10001", "00001", "00110", "00100", "00000", "00100"),
+    "!": ("00100", "00100", "00100", "00100", "00100", "00000", "00100"),
+    "=": ("00000", "00000", "11111", "00000", "11111", "00000", "00000"),
+    "#": ("01010", "01010", "11111", "01010", "11111", "01010", "01010"),
+    "&": ("01100", "10010", "10100", "01000", "10101", "10010", "01101"),
+    "*": ("00000", "00100", "10101", "01110", "10101", "00100", "00000"),
+    "<": ("00010", "00100", "01000", "10000", "01000", "00100", "00010"),
+    ">": ("01000", "00100", "00010", "00001", "00010", "00100", "01000"),
+    "[": ("01110", "01000", "01000", "01000", "01000", "01000", "01110"),
+    "]": ("01110", "00010", "00010", "00010", "00010", "00010", "01110"),
 }
 
 # segmentos por digito: a arriba, b/c derecha, d abajo, e/f izquierda, g centro
@@ -125,7 +139,8 @@ def draw_text(mesh, x, y, z, h, s, col, light=0.0, align="l", depth=0.03) -> Non
     """Escribe `s` en fuente pixel 5x7 con trazos gordos y alivio poco profundo.
 
     `y` es el centro vertical de las letras. `align` "c"/"r" centra o alinea a la derecha
-    el trazo real (`ink_w`); con "l" `x` es el origen de la primera celda, como siempre.
+    el trazo real (`ink_w`); con "l" `x` es el origen de la primera celda, como siempre. Con
+    `depth` = 0 cada trazo es un quad plano en vez de una caja (para texto visto de frente).
     """
     px = h / 7.0
     if align == "c":
@@ -148,8 +163,13 @@ def draw_text(mesh, x, y, z, h, s, col, light=0.0, align="l", depth=0.03) -> Non
                 run = 1
                 while c + run < 5 and bits[c + run] == "1":
                     run += 1
-                mesh.box(gx + (c + run / 2.0 - 0.5) * px, y + (3.0 - row) * px, z,
-                         run * px + px * 0.18, px * 0.82, depth, col, light=light)
+                cx, cy = gx + (c + run / 2.0 - 0.5) * px, y + (3.0 - row) * px
+                if depth > 0:
+                    mesh.box(cx, cy, z, run * px + px * 0.18, px * 0.82, depth, col, light=light)
+                else:                      # plano: solo se ve de frente (menu), 10x mas barato
+                    hw, hh = (run * px + px * 0.18) / 2.0, px * 0.41
+                    mesh.quad((cx - hw, cy - hh, z), (cx + hw, cy - hh, z), (cx + hw, cy + hh, z),
+                              (cx - hw, cy + hh, z), col, (0.0, 0.0, 1.0), light)
                 c += run
 
 

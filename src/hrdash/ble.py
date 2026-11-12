@@ -10,6 +10,8 @@ import asyncio
 import math
 import random
 import time
+import weakref
+from dataclasses import dataclass
 
 from bleak import BleakClient, BleakScanner
 
@@ -180,22 +182,101 @@ def parse_indoor_bike(data: bytearray) -> dict:
 
 
 # ---------------------------------------------------------------- escaneo --
+@dataclass(frozen=True)
+class Found:
+    """Dispositivo BLE reconocido en un escaneo (banda de FC o rodillo)."""
+
+    name: str                 # "" si no anuncia nombre
+    address: str              # MAC (BlueZ) o UUID de CoreBluetooth
+    rssi: int                 # dBm (mas cerca = menos negativo)
+    kind: str                 # "hr" | "trainer"
+    caps: tuple = ()          # servicios anunciados: "FC", "POT", "FTMS", "CSC"
+
+
+_SERVICE_CAPS = (("180d", "FC"), ("1818", "POT"), ("1826", "FTMS"), ("1816", "CSC"))
+SCAN_TTL = 5.0                # un escaneo reciente se reutiliza (varios consumidores a la vez)
+_SCAN_LOCKS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_SCAN_CACHE: dict = {"t": -1e9, "found": []}
+
+
+def classify(name: str, uuids) -> tuple:
+    """(tipo, servicios) de un anuncio: "trainer", "hr" o None si no es ninguno.
+
+    Rodillo si el nombre lo sugiere o anuncia Cycling Power (1818) o FTMS (1826); banda de FC si
+    el nombre lo sugiere o anuncia 180D. El rodillo gana: algunos (p. ej. Wahoo) anuncian ambos.
+    """
+    low = (name or "").lower()
+    us = [str(u).lower() for u in (uuids or [])]
+    caps = tuple(label for short, label in _SERVICE_CAPS if any(short in u for u in us))
+    is_trainer = any(h in low for h in TRAINER_NAME_HINTS) or "POT" in caps or "FTMS" in caps
+    is_hr = any(h in low for h in HR_NAME_HINTS) or "FC" in caps
+    if is_trainer:
+        return "trainer", caps
+    if is_hr:
+        return "hr", caps
+    return None, caps
+
+
+async def scan_devices(timeout: float = 6.0, fresh: bool = False) -> list:
+    """Escaneo BLE clasificado: lista de `Found`, de mas cerca a mas lejos dentro de cada tipo.
+
+    Los escaneos se SERIALIZAN con un candado por bucle de eventos: BlueZ no admite dos a la
+    vez ("operation already in progress") y aqui compiten las dos fuentes, que resuelven su
+    dispositivo, y el menu. Un escaneo de hace menos de `SCAN_TTL` s se reutiliza, salvo con
+    `fresh=True` (boton Buscar). Usa `return_adv=True` porque bleak >= 1 ya no expone
+    `BLEDevice.metadata`: sin el anuncio no hay servicios ni RSSI.
+    """
+    loop = asyncio.get_running_loop()
+    lock = _SCAN_LOCKS.get(loop)
+    if lock is None:
+        lock = _SCAN_LOCKS[loop] = asyncio.Lock()
+    async with lock:
+        if not fresh and time.monotonic() - _SCAN_CACHE["t"] < SCAN_TTL:
+            return list(_SCAN_CACHE["found"])
+        raw = await BleakScanner.discover(timeout=timeout, return_adv=True)
+        found = []
+        for _addr, (dev, adv) in raw.items():
+            name = (dev.name or getattr(adv, "local_name", None) or "").strip()
+            kind, caps = classify(name, getattr(adv, "service_uuids", None))
+            if kind:
+                found.append(Found(name, dev.address, int(getattr(adv, "rssi", None) or -100),
+                                   kind, caps))
+        found.sort(key=lambda f: (f.kind != "hr", -f.rssi))
+        _SCAN_CACHE["t"], _SCAN_CACHE["found"] = time.monotonic(), found
+        return list(found)
+
+
 async def scan_all(timeout: float = 8.0) -> tuple[list, list]:
-    """Una sola pasada de escaneo clasificada en (bandas FC, rodillos)."""
-    devices = await BleakScanner.discover(timeout=timeout)
-    hrs, trs = [], []
-    for d in devices:
-        name = (d.name or "").lower()
-        md = getattr(d, "metadata", None)
-        uuids = [str(u).lower() for u in (md.service_uuids or [])] if md is not None else []
-        is_trainer = (any(h in name for h in TRAINER_NAME_HINTS)
-                      or any(("1818" in u or "1826" in u) for u in uuids))
-        is_hr = any(h in name for h in HR_NAME_HINTS) or any("180d" in u for u in uuids)
-        if is_trainer:
-            trs.append(d)
-        elif is_hr:
-            hrs.append(d)
-    return hrs, trs
+    """Una sola pasada de escaneo clasificada en (bandas FC, rodillos), de `Found`."""
+    found = await scan_devices(timeout)
+    return ([f for f in found if f.kind == "hr"], [f for f in found if f.kind == "trainer"])
+
+
+def friendly_error(text: str) -> str | None:
+    """Motivo corto, en mayusculas y ASCII (cabe en la fuente del menu), de un error de Bluetooth
+    conocido a partir de su texto; None si no se reconoce."""
+    low = (text or "").lower()
+    if "dbus" in low or "org.bluez" in low or "no such file" in low or "connection refused" in low:
+        return "BLUETOOTH NO DISPONIBLE"
+    if "turned off" in low or "poweredoff" in low or "not powered" in low:
+        return "BLUETOOTH APAGADO"
+    if "permission" in low or "authoriz" in low or "denied" in low:
+        return "SIN PERMISO DE BLUETOOTH"
+    if "adapter" in low:
+        return "SIN ADAPTADOR BLUETOOTH"
+    return None
+
+
+def describe_scan_error(exc: BaseException) -> str:
+    """Motivo corto de un escaneo fallido (ver `friendly_error`)."""
+    if isinstance(exc, (FileNotFoundError, ConnectionRefusedError)):
+        return "BLUETOOTH NO DISPONIBLE"
+    return friendly_error(f"{type(exc).__name__} {exc}") or ("ERROR: " + type(exc).__name__.upper())[:30]
+
+
+def is_address(target: str) -> bool:
+    """MAC (BlueZ) o UUID de CoreBluetooth, no un nombre: se conecta directo, sin escanear."""
+    return bool(target) and (":" in target or len(target) == 36 or len(target) > 20)
 
 
 async def scan_heart_rate_sensors(timeout: float = 8.0) -> list:
@@ -228,6 +309,7 @@ class _BLESource:
     def __init__(self, target: str | None = None):
         self.target = target
         self.name: str = target or "escaneando..."
+        self.address: str | None = None      # direccion real una vez resuelta (para el menu)
         self.connected: bool = False
         self.error: str = ""
         self.last_update: float = 0.0
@@ -242,7 +324,8 @@ class _BLESource:
 
     async def _resolve(self) -> str | None:
         t = self.target
-        if t and (":" in t or len(t) == 36 or len(t) > 20):
+        if t and is_address(t):
+            self.address = t
             return t                                   # MAC o UUID de CoreBluetooth
         candidates = await self._scan()
         dev = None
@@ -255,6 +338,7 @@ class _BLESource:
             dev = candidates[0]
         if dev is not None:
             self.name = dev.name or dev.address
+            self.address = dev.address
             return dev.address
         return None
 
@@ -464,6 +548,8 @@ class SimSensor:
     """Sensor + rodillo simulados: curva tipica de entrenamiento con ruido."""
 
     name = "SIMULADOR"
+    is_sim = True
+    address = None
     connected = True
     contact = True
     battery = 85
@@ -519,6 +605,22 @@ class SimSensor:
 
 
 # -------------------------------------------------------------------- probe -
+async def sim_scan(timeout: float = 6.5, fresh: bool = True) -> list:
+    """Escaneo de demostracion (`--simulate`): dos dispositivos de mentira tras una pausa corta."""
+    await asyncio.sleep(min(1.2, max(0.0, timeout)))
+    return [Found("Banda FC (demo)", "demo-hr", -52, "hr", ("FC",)),
+            Found("Rodillo (demo)", "demo-trainer", -61, "trainer", ("POT", "FTMS"))]
+
+
+def sim_factory(slot: str, dev) -> "SimSensor":
+    """Fuente para `--simulate`: todo lo que se elija en el menu es un `SimSensor`."""
+    src = SimSensor()
+    if dev:
+        src.name = dev.get("name") or src.name
+        src.address = dev.get("address")
+    return src
+
+
 async def probe(target: str | None = None, seconds: float = 12.0,
                 trainer: bool = False) -> None:
     """Se suscribe a TODAS las caracteristicas notify y vuelca hex + parseos.

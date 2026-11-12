@@ -86,6 +86,16 @@ distance reset). The snapshot carries `phase` and, only then, `menu`. The child 
 (HUD layers, ortho camera) and answers with `{"ui": {"act": id}}`; widget layout is the pure
 `menu_widgets(menu, aspect)`, shared by drawing and hit-testing. In the menu phase the window
 must ignore every view key (otherwise `g`/arrows bypass Play); `cmd_3d` polls at 10 Hz there.
+Phase 2 adds sensor assignment: each source runs in its own task (`Engine._runs`, keyed by
+`id(source)`, so the shared simulator runs once); scanning goes through `ble.scan_devices`, which
+serialises scans with a per-loop lock and reuses a scan younger than 5 s (BlueZ cannot run two at
+once; the sources, the menu and `--scan` all compete). It uses `return_adv=True` because bleak 3.x
+dropped `BLEDevice.metadata`. `Engine` takes injectable `scanner(timeout, fresh)` and
+`factory(slot, dev)`: that is how the menu is tested with no Bluetooth (fake sources + XTest input
+on the real window). Persist the chosen devices in the `finally` of `cmd_3d` BEFORE `eng.stop()`:
+stopping flips every source to `connected = False`. Menu text is flat (`draw_text(depth=0)`) and
+split into four layers by how often it changes; keep per-snapshot rebuilds cheap. Keys that only
+mean something in the menu (`MENU_ONLY` in `glview`) must not be forwarded to the TUI.
 `winkey()` must use the pointer address (`ctypes.cast(win, c_void_p).value`): glfw-python's window
 is `LP__GLFWwindow` with no `.value`, and `id(win)` differs per callback, which silently broke
 `slot_under()` (wheel, drag-orbit, focus, menu hover). Test input with XTest through `ctypes`

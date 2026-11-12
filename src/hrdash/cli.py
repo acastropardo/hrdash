@@ -10,8 +10,8 @@ import sys
 import time
 
 from . import __version__
-from .ble import (SensorSource, SimSensor, TrainerSource, probe,
-                  scan_heart_rate_sensors, scan_trainers)
+from .ble import (SensorSource, SimSensor, TrainerSource, is_address, probe,
+                  scan_heart_rate_sensors, scan_trainers, sim_factory, sim_scan)
 from .config import Config, load_config, prompt_interactive, save_config
 from .engine import Engine, SCENES_VIEWS
 from .history import Session
@@ -99,13 +99,17 @@ async def _print_devices(title: str, devices) -> None:
         print("  (nada detectado)")
         return
     for d in devices:
-        print(f"  {d.address:<40} {d.name or '(sin nombre)'}")
+        print(f"  {d.address:<40} {d.name or '(sin nombre)':<28} RSSI {d.rssi}")
 
 
 async def cmd_scan(seconds: int) -> int:
-    from .ble import scan_all
+    from .ble import describe_scan_error, scan_all
     print(f"Escaneando {seconds}s (bandas de FC y rodillos)...")
-    hrs, trs = await scan_all(timeout=seconds)
+    try:
+        hrs, trs = await scan_all(timeout=seconds)
+    except Exception as exc:  # noqa: BLE001 - sin Bluetooth o sin permiso: un motivo, no un traceback
+        print(f"No se pudo escanear: {describe_scan_error(exc).lower()} ({type(exc).__name__}).")
+        return 2
     await _print_devices("Bandas/pulsometros de FC:", hrs)
     await _print_devices("Rodillos (Cycling Power / FTMS):", trs)
     if hrs or trs:
@@ -191,7 +195,7 @@ def cmd_tui(hr_source, tr_source, cfg: Config) -> int:
 
 
 async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None = None,
-                 host=None, menu: bool = False) -> int:
+                 host=None, menu: bool = False, scanner=None, factory=None) -> int:
     """Modo 3D (por defecto o `--3d`): motor + ventana, sin TUI. No hay terminal al que
     reenviar teclas.
 
@@ -210,12 +214,14 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     """
     from .glview import GLHost
     host = host or GLHost()
-    eng = Engine(hr_source, tr_source, cfg, menu=menu)
+    eng = Engine(hr_source, tr_source, cfg, menu=menu, scanner=scanner, factory=factory)
     eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
     if not host.start():
         print(f"3D: {host.error or '3D no disponible: pip install -e \".[gl]\"'}")
         return 2
     eng.start()
+    if menu:
+        eng.request_scan(fresh=False)        # lista inicial (comparte el escaneo de las fuentes)
     print(f"3D standalone · {'menu -> ' if menu else ''}vistas: {'+'.join(eng.views)} · FC={getattr(hr_source, 'name', '')}"
           + (f" · rodillo={getattr(tr_source, 'name', '')}" if tr_source else "")
           + " · `q` en la ventana o Ctrl+C para salir y grabar · `v` camara · `i` tacometros")
@@ -247,7 +253,7 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
                 if m.get("win"):
                     opened = True
                 ui = m.get("ui")
-                if isinstance(ui, dict) and eng.handle_ui(ui):
+                if isinstance(ui, dict) and await eng.handle_ui(ui):
                     ui_changed = True
                 if m.get("key") and eng.handle_key(m["key"]):
                     quit_now = True
@@ -289,15 +295,19 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
             task.uncancel()
         print("\n3D: Ctrl+C" + (", grabando..." if eng.phase != "menu" else ""))
     finally:
+        # Guardar ANTES de parar: al parar, cada fuente pasa a `connected = False` y el ultimo
+        # sensor/rodillo nunca llegaba a guardarse (antes se hacia despues de `eng.stop()`).
+        try:
+            persist_choices(eng, cfg)
+        except Exception:  # noqa: BLE001 - no poder guardar la config no debe impedir exportar
+            pass
         await eng.stop()
         host.stop()
     if eng.phase == "menu":                  # salio del menu sin pulsar Play: no hay sesion
-        persist_last(eng.hr, eng.tr, cfg)
         print("Saliste del menu sin iniciar: no se grabo nada.")
         return 2 if never_opened else 0
     res = eng.export()
     print_summary(eng.session, res)
-    persist_last(eng.hr, eng.tr, cfg)
     return 2 if never_opened or not eng.session.n else 0
 
 
@@ -317,16 +327,32 @@ def gl_unavailable() -> str | None:
     return None
 
 
-def persist_last(hr_source, tr_source, cfg: Config) -> None:
-    """Guarda el ultimo sensor/rodillo usado (lo mismo que hace la TUI al salir)."""
+def source_ident(src) -> str:
+    """Lo que se guarda de una fuente para reconectar: su direccion si se eligio por direccion
+    (distingue dos dispositivos con el mismo nombre) y si no, el nombre."""
+    target = getattr(src, "target", None) or ""
+    return target if is_address(target) else src.name
+
+
+def persist_last(hr_source, tr_source, cfg: Config) -> bool:
+    """Guarda el ultimo sensor/rodillo usado (lo mismo que hace la TUI al salir). True si cambio."""
     changed = False
     if getattr(hr_source, "name", "") and not isinstance(hr_source, SimSensor) \
             and getattr(hr_source, "connected", False):
-        cfg.last_device = hr_source.name
+        cfg.last_device = source_ident(hr_source)
         changed = True
     if tr_source is not None and not isinstance(tr_source, SimSensor) \
             and getattr(tr_source, "connected", False):
-        cfg.last_trainer = tr_source.name
+        cfg.last_trainer = source_ident(tr_source)
+        changed = True
+    return changed
+
+
+def persist_choices(eng, cfg: Config) -> None:
+    """Guarda lo elegido en el menu: ultimos dispositivos y si se usa rodillo. Una sola escritura."""
+    changed = persist_last(eng.hr, eng.tr, cfg)
+    if eng.trainer_pref is not None and cfg.use_trainer != eng.trainer_pref:
+        cfg.use_trainer = eng.trainer_pref
         changed = True
     if changed:
         save_config(cfg)
@@ -365,7 +391,7 @@ def main(argv=None) -> int:
     else:
         hr_source = SensorSource(args.sensor or cfg.last_device)
         tr_source = None
-        if not args.no_trainer:
+        if not args.no_trainer and (args.trainer or cfg.use_trainer):
             tr_source = TrainerSource(args.trainer or cfg.last_trainer,
                                       wheel_mm=cfg.wheel_mm)
 
@@ -386,7 +412,9 @@ def main(argv=None) -> int:
         # Si el entorno no da para GL, cmd_3d avisa y sale con 2 (la TUI no se toca).
         # El dest de "--3d-view" es "3d_view", no un identificador valido: getattr.
         return asyncio.run(cmd_3d(hr_source, tr_source, cfg,
-                                  getattr(args, "3d_view") or ["gauge"], menu=not args.now))
+                                  getattr(args, "3d_view") or ["gauge"], menu=not args.now,
+                                  scanner=sim_scan if args.simulate else None,
+                                  factory=sim_factory if args.simulate else None))
 
     if not sys.stdout.isatty():
         print("La consola (--ascii) necesita un terminal interactivo. Usa --duration para "
