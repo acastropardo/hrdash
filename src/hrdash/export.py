@@ -20,14 +20,18 @@ def _stamp(session: Session) -> str:
 
 
 def export_csv(session: Session, config: Config, path: Path) -> Path:
-    lines = ["epoch,iso,heart_rate,zone_idx,zone,kcal_per_min,watts,cadence_rpm,speed_kmh,distance_m"]
+    # La columna `bloque` solo aparece si hubo un plan: sin el, el CSV es el de siempre.
+    plan = any(s.bloque for s in session.samples)
+    lines = ["epoch,iso,heart_rate,zone_idx,zone,kcal_per_min,watts,cadence_rpm,speed_kmh,distance_m"
+             + (",bloque" if plan else "")]
     for s in session.samples:
         zkey = f"Z{s.zone_idx}"
         lines.append(f"{s.epoch},{s.iso},{s.hr},{s.zone_idx},{zkey},{s.kcal_per_min:.4f},"
                      f"{'' if s.watts is None else s.watts},"
                      f"{'' if s.cadence is None else s.cadence},"
                      f"{'' if s.speed_kmh is None else s.speed_kmh},"
-                     f"{'' if s.dist_m is None else s.dist_m}")
+                     f"{'' if s.dist_m is None else s.dist_m}"
+                     + (("," + (s.bloque or "").replace(",", " ")) if plan else ""))
     path.write_text("\n".join(lines) + "\n")
     return path
 

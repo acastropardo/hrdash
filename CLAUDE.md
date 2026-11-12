@@ -114,6 +114,16 @@ limit); phase 4 will follow it live. Menu steppers are widgets with `kind="stepp
 `id:+` or `id:-` (side of the click via `hit_act`, Left/Right via `activate(..., step)`). Focus
 defaults to INICIAR, else the first non-tab widget (tabs come first in focus order).
 
+## Following the plan (phase 4)
+
+`Engine.plan_info()` (clock = `Session.elapsed_s`) goes in the optional snapshot key `workout`;
+`block_label()` fills `Sample.bloque` and the CSV column (only when a plan existed). Drawing is
+`cluster.plan_hud` (layer `hud_plan`, rebuilt per snapshot; the block-change flash is a pure function
+of `elapsed`, no per-frame layer) and `cluster.dial_target` (arc on the HR/power bezel, built in the
+values layers). `scene_gauge` adds the strip and zooms the camera out (`_cam(plan=True)`) so it does
+not cover the panel's top labels; the pista puts it under the digital strip. `--now` builds the plan in
+`cmd_3d`, not in `Engine.__init__`, so headless runs are unaffected.
+
 ## Workout plans
 
 `workouts.py` is the pure model for the pre-session menu feature (plan:

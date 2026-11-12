@@ -339,9 +339,36 @@ el plan; que la sesion lo siga en vivo (tira de bloque, arco objetivo, avisos) e
   guardada coincide campo a campo con lo hecho, reaparece al reabrir y el resumen imprime el plan.
   Los escenarios de las fases 1 y 2 se repiten sin cambios (esa repeticion encontro el foco por
   defecto detras de las pestanas).
-- No hecho / limites: el plan aun no se sigue en vivo ni se exporta (fase 4/5); los presets no son
+- No hecho / limites: el plan se sigue en vivo desde la fase 4 y se exporta en la 5; los presets no son
   editables (se copian a "personalizada" a mano); el editor no hace series con varios niveles
   (calentar, N x fuerte/suave, enfriar); las pausas entre series largas del 30/30 no se pueden
   construir en el editor; y en macOS siguen por confirmar el clic con la ventana recien abierta y el
   tamano con HiDPI.
 
+
+## Estado de la fase 4 (hecha)
+
+El plan elegido se sigue durante la sesion. El reloj del plan es el de `Session` (segundos desde
+`begin()`, o desde el arranque con `--now`), asi que `x` (reiniciar) tambien lo reinicia.
+
+- **Motor** (`engine.py`): `plan_info()` da lo que se dibuja (bloque actual con su indice, repeticion,
+  cuenta atras, siguiente bloque, avance, perfil, objetivo resuelto y su estado `low`/`ok`/`high`) y
+  viaja en la clave opcional `workout` del snapshot (no sube `PROTOCOL`; sin plan la clave no esta).
+  `block_label()` ("Esfuerzo 2/4", o "libre" cuando el plan termino) alimenta la columna `bloque`.
+  Objetivo por potencia si hay lectura del rodillo y el bloque la define; si no, por FC.
+  Terminado el plan, `done` + `over` (segundos de mas): se avisa y la sesion sigue libre.
+- **Tira del plan** (`cluster.plan_hud`, capa `hud_plan`, a 1 Hz): nombre y repeticion, siguiente
+  bloque, cuenta atras, rango objetivo con su estado (EN RANGO / SUBE / BAJA) y una barra con un tramo
+  por bloque (color = banda) y el marcador del momento. Los primeros 4 s de cada bloque el fondo
+  alterna cada segundo (destello; sin audio). En la pista va bajo la tira digital; en el tablero va
+  arriba y la camara se aleja un poco para dejarle sitio (sin plan, el encuadre es el de siempre).
+- **Arco objetivo** (`cluster.dial_target`): sobre el bisel del dial de FC o de potencia, del color
+  del estado, en tablero y en el HUD de la pista.
+- **CSV**: columna `bloque` solo si hubo plan; sin plan el CSV es el de siempre. La terminal imprime
+  `[mm:ss] bloque: ...` en cada cambio.
+- `--now` aplica la sesion guardada; `--duration` (headless) no.
+- Verificacion: `plan_check.py` (posicion en los bordes, estados, fin del plan, CSV con y sin
+  columna, sesion libre con minutos), renders offscreen del tablero y la pista en 8 casos, y una
+  sesion real bajo Xvfb con `--simulate --now` (tira y arco en la ventana, columna en el CSV).
+  Auditorias de menu, dials y el smoke del FIT sin cambios.
+- No hecho (fase 5): un lap por bloque en el FIT, resumen por bloque, pausa y la prueba con GPU real.

@@ -784,8 +784,12 @@ def scene_watts(snap, anim, aspect=1.6):
 
 def scene_gauge(snap, anim, aspect=1.6):
     """Cluster completo: los 4 diales + tira digital, llenando la ventana."""
-    from .cluster import CLUSTER                  # lazy: cluster importa de aqui
-    return CLUSTER.build(snap, anim, aspect)
+    from .cluster import CLUSTER, plan_hud        # lazy: cluster importa de aqui
+    layers, cam = CLUSTER.build(snap, anim, aspect)
+    plan = plan_hud(snap, anim, aspect, top=True)
+    if plan:                                      # con un plan en curso, tira de bloque encima
+        return layers + plan, cam + (80.0, True)
+    return layers, cam
 
 
 def _kappa(s):

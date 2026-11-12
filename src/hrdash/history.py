@@ -20,6 +20,7 @@ class Sample:
     cadence: float | None = None
     speed_kmh: float | None = None
     dist_m: int | None = None      # distancia acumulada del rodillo
+    bloque: str | None = None      # bloque del plan en curso ("Esfuerzo 2/4"); None sin plan
 
 
 class Session:
@@ -45,7 +46,8 @@ class Session:
         self.total_dist_m: int = 0
 
     def add(self, hr: int, watts: int | None = None, cadence: float | None = None,
-            speed_kmh: float | None = None, dist_m: int | None = None) -> Sample:
+            speed_kmh: float | None = None, dist_m: int | None = None,
+            bloque: str | None = None) -> Sample:
         cfg = self.config
         epoch = int(time.time())
         zone = zone_for_hr(hr, cfg.zones(), cfg.computed_hrmax())
@@ -53,7 +55,8 @@ class Session:
         s = Sample(epoch=epoch,
                    iso=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(epoch)),
                    hr=hr, zone_idx=zone.idx, kcal_per_min=kpm,
-                   watts=watts, cadence=cadence, speed_kmh=speed_kmh, dist_m=dist_m)
+                   watts=watts, cadence=cadence, speed_kmh=speed_kmh, dist_m=dist_m,
+                   bloque=bloque)
         self.samples.append(s)
         self._sum_hr += hr
         if hr > self.max_hr:
