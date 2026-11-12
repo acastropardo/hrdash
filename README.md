@@ -34,7 +34,10 @@ source .venv/bin/activate          # o alias: alias hrdash="$HOME/Documents/fc/.
 ## Uso
 
 ```bash
-hrdash                    # pregunta edad [47], sexo [M], peso [70]; banda + rodillo auto
+hrdash                    # ventana 3D (pista con tacometros), sin consola; pregunta edad/sexo/peso
+hrdash --ascii            # la consola de siempre (TUI) en la terminal
+hrdash --3d               # 3D explicito: si no hay GL o pantalla, falla en vez de caer a --ascii
+hrdash --3d-view gauge    # 3D con otra vista (hr, watts, gauge, pista); repetible para partir
 hrdash --scan             # lista sensores de FC y rodillos detectados y sale
 hrdash --probe 12         # vuelca GATT y payloads crudos del dispositivo (diagnóstico)
 hrdash --sensor "R+2.0" --trainer "Tacx"   # fuerza nombres o direcciones
@@ -45,12 +48,21 @@ hrdash --duration 30      # modo headless: 30 s de muestreo + grabación (para s
 hrdash --fresh            # vuelve a preguntar aunque haya config guardada
 ```
 
-Teclas dentro del dashboard:
+Por defecto `hrdash` abre la **ventana 3D sin consola**: el motor muestrea y graba igual,
+la terminal solo muestra una linea de estado y el resumen al salir (`q` en la ventana o
+Ctrl+C en la terminal graban FIT + CSV). Dentro de la ventana: `h`/`w`/`g`/`p` y `←`/`→`
+cambian de vista, `3`/`r` abren o cierran el tablero o la pista, `v` cambia la camara,
+`i` muestra u oculta los tacometros, `+`/`-` o la rueda hacen zoom y `x`/`s` reinician o
+reconectan. Si el 3D no puede arrancar (sin el extra `gl` o, en Linux, sin pantalla),
+`hrdash` cae a la consola con un aviso.
+
+Teclas dentro de la consola (`--ascii`):
 
 | tecla | acción |
 |---|---|
 | `q` | salir y **grabar FIT + CSV** |
-| `r` | reiniciar la sesión (mismos datos) |
+| `x` | reiniciar la sesión (mismos datos) |
+| `r` | abre/cierra la **ventana 3D de la pista** (velodromo con tacometros) |
 | `s` | reconectar banda y rodillo |
 | `c` | cambiar edad / sexo / peso / **FTP** en caliente |
 | `h` | vista principal del gráfico: **FC** (default) |

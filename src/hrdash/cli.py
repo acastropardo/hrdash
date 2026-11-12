@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
+import os
 import sys
 
 from . import __version__
@@ -17,7 +19,8 @@ from .history import Session
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="hrdash",
-        description="Dashboard de FC + telemetria (watts/velocidad/cadencia) en terminal.",
+        description="Dashboard de FC + telemetria (watts/velocidad/cadencia): ventana 3D "
+                    "(por defecto) o consola (--ascii).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--age", type=int, help="edad (default 47 o config)")
@@ -34,9 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--trainer", metavar="NOMBRE_O_ADDR",
                    help="rodillo (Tacx): nombre o direccion (default: autoscaneo)")
     p.add_argument("--no-trainer", action="store_true", help="no buscar rodillo")
-    # Las rutas de salida son excluyentes con --3d: es su propio modo, sin TUI, y no
-    # puede ir con --scan/--probe/--duration para que no colisionen con la consola.
-    # --simulate si se combina (fuera del grupo): es la fuente, no una ruta.
+    # Los modos son excluyentes. Sin ninguno arranca el 3D standalone (motor + ventana, sin
+    # consola); `--ascii` es la TUI de siempre. --simulate si se combina (fuera del grupo):
+    # es la fuente, no una ruta.
     modes = p.add_mutually_exclusive_group()
     modes.add_argument("--scan", nargs="?", const=8, type=int, metavar="SEG",
                        help="listar sensores de FC y rodillos detectados y salir")
@@ -45,12 +48,14 @@ def build_parser() -> argparse.ArgumentParser:
     modes.add_argument("--duration", type=int, metavar="SEG",
                        help="modo headless: muestrear N segundos, grabar y salir")
     modes.add_argument("--3d", dest="threed", action="store_true",
-                       help="3D standalone: motor + ventana GLFW, sin TUI; las teclas de la "
-                            "ventana no colisionan con el terminal")
+                       help="3D standalone (el modo por defecto): motor + ventana GLFW, sin "
+                            "consola; falla si el 3D no esta disponible")
+    modes.add_argument("--ascii", action="store_true",
+                       help="consola (TUI de Textual) en la terminal, sin ventana 3D")
     p.add_argument("--simulate", action="store_true",
                    help="sensor+rodillo simulados (sin BLE) para probar el dashboard")
     p.add_argument("--3d-view", choices=list(SCENES_VIEWS), action="append",
-                   metavar="VISTA", help="vistas del modo --3d (default: gauge)")
+                   metavar="VISTA", help="vistas del modo 3D, repetible (default: pista)")
     p.add_argument("--export-dir", help="carpeta de exportacion (default ./exportes)")
     p.add_argument("--no-fit", action="store_true", help="no grabar archivo FIT")
     p.add_argument("--no-csv", action="store_true", help="no grabar CSV espejo")
@@ -183,7 +188,8 @@ def cmd_tui(hr_source, tr_source, cfg: Config) -> int:
 
 async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None = None,
                  host=None) -> int:
-    """`--3d`: motor + ventana, sin TUI. No hay terminal al que reenviar teclas.
+    """Modo 3D (por defecto o `--3d`): motor + ventana, sin TUI. No hay terminal al que
+    reenviar teclas.
 
     El motor es el dueño del estado (Session/LapTracker/export); la ventana es un proceso
     hijo que habla JSON por tuberia (proto.py). La ventana gestiona aqui su teclado y su
@@ -198,14 +204,14 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     from .glview import GLHost
     host = host or GLHost()
     eng = Engine(hr_source, tr_source, cfg)
-    eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
+    eng.views = [v for v in (views or ["pista"]) if v in SCENES_VIEWS]
     if not host.start():
         print(f"3D: {host.error or '3D no disponible: pip install -e \".[gl]\"'}")
         return 2
     eng.start()
     print(f"3D standalone · vistas: {'+'.join(eng.views)} · FC={getattr(hr_source, 'name', '')}"
           + (f" · rodillo={getattr(tr_source, 'name', '')}" if tr_source else "")
-          + " · `q` en la ventana o Ctrl+C para salir y grabar")
+          + " · `q` en la ventana o Ctrl+C para salir y grabar · `v` camara · `i` tacometros")
     warned = False
     quit_now = False
     opened = False        # primer mensaje `win` del hijo: la ventana existe
@@ -250,7 +256,13 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
                     warned = True
                 if seconds is None:
                     break        # sin ventana y sin limite: no hay nada que mostrar
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # Con Python >= 3.11, `asyncio.run` no lanza KeyboardInterrupt dentro de la corrutina:
+        # cancela la tarea y lo relanza al final, asi que sin capturar CancelledError el Ctrl+C
+        # se saltaba la exportacion. Se quita la cancelacion para que stop/export corran.
+        task = asyncio.current_task()
+        if task is not None and hasattr(task, "uncancel"):
+            task.uncancel()
         print("\n3D: Ctrl+C, grabando...")
     finally:
         await eng.stop()
@@ -259,6 +271,22 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     print_summary(eng.session, res)
     persist_last(eng.hr, eng.tr, cfg)
     return 2 if never_opened or not eng.session.n else 0
+
+
+def gl_unavailable() -> str | None:
+    """Motivo por el que el 3D no puede arrancar aqui, o None si puede.
+
+    Solo mira lo barato (paquetes del extra `gl` instalados y, en Linux, que haya display):
+    sirve para que el modo por defecto caiga a la consola en vez de fallar. Que la ventana
+    abra de verdad lo decide el proceso hijo.
+    """
+    missing = [m for m in ("moderngl", "glfw", "numpy") if importlib.util.find_spec(m) is None]
+    if missing:
+        return "faltan " + ", ".join(missing) + ' (pip install -e ".[gl]")'
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY")
+                                                 or os.environ.get("WAYLAND_DISPLAY")):
+        return "no hay display (DISPLAY/WAYLAND_DISPLAY)"
+    return None
 
 
 def persist_last(hr_source, tr_source, cfg: Config) -> None:
@@ -316,14 +344,25 @@ def main(argv=None) -> int:
     if args.duration:
         return asyncio.run(cmd_headless(hr_source, tr_source, cfg, args.duration))
 
-    if args.threed:
+    # Sin modo explicito arranca el 3D; si aqui no puede (sin paquetes GL o sin display),
+    # cae a la consola en vez de fallar. Con --3d explicito no hay caida: falla y avisa.
+    use_3d = args.threed
+    if not args.ascii and not args.threed:
+        why = gl_unavailable()
+        if why is None:
+            use_3d = True
+        else:
+            print(f"3D no disponible ({why}): arranco la consola (--ascii).")
+    if use_3d:
         # Standalone: no hace falta TTY para el motor; la ventana la pone el proceso hijo.
         # Si el entorno no da para GL, cmd_3d avisa y sale con 2 (la TUI no se toca).
         # El dest de "--3d-view" es "3d_view", no un identificador valido: getattr.
-        return asyncio.run(cmd_3d(hr_source, tr_source, cfg, getattr(args, "3d_view")))
+        return asyncio.run(cmd_3d(hr_source, tr_source, cfg,
+                                  getattr(args, "3d_view") or ["pista"]))
 
     if not sys.stdout.isatty():
-        print("La TUI necesita un terminal interactivo. Usa --duration para modo headless.")
+        print("La consola (--ascii) necesita un terminal interactivo. Usa --duration para "
+              "modo headless.")
         return 2
     return cmd_tui(hr_source, tr_source, cfg)
 
