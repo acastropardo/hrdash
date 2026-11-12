@@ -302,3 +302,26 @@ Captura lateral: se lee como un muneco de palos, no como un ciclista.
   (pantalla completa), `3` (vista partida: el HUD queda en su mitad) e `i` (oculto); al
   salir `round-trip OK 64/64`; escenas hr/watts/gauge sin cambios; smoke FIT OK.
 
+## Extra: stuttering en la vista mixta (tablero + pista)
+
+**Estado: hecho.** Reportado en un Mac con GPU real; validado y medido aqui (Xvfb + llvmpipe,
+donde no hay vsync, asi que lo del vsync se razona por el codigo y los conteos, no por fps).
+
+- **Causa 1 (la principal)**: `glfw.swap_buffers` estaba dentro del bucle por vistas. En la vista
+  mixta las dos vistas comparten ventana, asi que habia 2 intercambios por fotograma: medido
+  `swaps/s = 30` con `fps = 15`. Con `swap_interval(1)` cada uno espera a un refresco (tope de 30
+  fps), el primero mostraba el fotograma a medias y la segunda mitad se pintaba sobre un buffer
+  indefinido. Ahora se intercambia una vez por ventana, despues de dibujar todas las vistas
+  (`swaps/s = fps`).
+- **Causa 2 (ritmo)**: el bucle dormia hasta 20 ms por fotograma; con vsync eso da 50 fps sobre
+  60 Hz y se ve como judder. Ahora el tope es 16 ms (solo evita girar en vacio sin vsync); con
+  vsync el propio intercambio marca el ritmo. `ms` del mensaje `fps` ya no incluye la espera
+  del vsync.
+- **Causa 3 (CPU)**: en la mixta Python gastaba ~13,5 ms por fotograma (presupuesto 16,7 a
+  60 Hz), la mitad en reconstruir ~80 palitos de dial (`Mesh.box`) por escena y fotograma.
+  `cluster.dial_frame` cachea ahora los palitos por (panel, escala, encendidos, color): la
+  geometria es identica (3000 diales aleatorios comparados) y la mixta baja a ~9,5 ms
+  (tablero 4,5 -> 2,9, pista 9,0 -> 6,6, con la subida a la GPU incluida).
+- Pendiente (no hecho): reutilizar buffers de GPU en vez de crear y liberar uno por capa y
+  fotograma (~3 ms), y cachear la capa de la aguja cuando ya convergio.
+

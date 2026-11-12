@@ -2197,7 +2197,15 @@ def child_main() -> None:
                 mvp = perspective(fovy, vw / vh, 0.1, far) @ look_at(eye, center, up)
                 hud = (hud_cam(vw / vh), HUD_EYE) if len(cam) > 5 and cam[5] else None
                 _draw(ctx, vaos, moderngl, np, mvp, eye, hud)
-                glfw.swap_buffers(win)
+            t_drawn = time.time()
+            # Un intercambio por VENTANA y fotograma, despues de dibujar todas las vistas. En la
+            # vista mixta (tablero + pista) las dos comparten ventana: intercambiar dentro del bucle
+            # por vistas hacia dos `swap_buffers` por fotograma, con vsync cada uno espera a un
+            # refresco (maximo 30 fps), el primero mostraba el fotograma a medias y la segunda
+            # mitad se pintaba sobre un buffer indefinido (parpadeo).
+            for w in _uniq(s[1] for s in slots):
+                glfw.make_context_current(w)
+                glfw.swap_buffers(w)
             glfw.poll_events()
             frames += 1
             if frames >= 60:
@@ -2208,8 +2216,11 @@ def child_main() -> None:
                        "look": {v: [round(y, 3), round(t, 3)] for v, (y, t) in look.items()},
                        "focus": {s[0]: bool(focus.get(winkey(s[1]))) for s in slots}})
                 frames, report_t, work = 0, now, 0.0
-            work += time.time() - t0
-            time.sleep(max(0.0, 0.02 - (time.time() - t0)))
+            work += t_drawn - t0                         # sin la espera del vsync: es el coste real
+            # Tope de ~60 fps solo para no girar en vacio sin vsync. Con vsync el intercambio ya
+            # bloquea hasta el refresco (>= 16,7 ms) y no se duerme nada: dormir hasta 20 ms
+            # metia 50 fps sobre una pantalla de 60 Hz, que se ve como judder.
+            time.sleep(max(0.0, 0.016 - (time.time() - t0)))
         for view, win, _r, ctx, _p, _a, vaos in slots:
             try:
                 glfw.make_context_current(win)
