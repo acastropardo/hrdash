@@ -34,7 +34,8 @@ source .venv/bin/activate          # o alias: alias hrdash="$HOME/Documents/fc/.
 ## Uso
 
 ```bash
-hrdash                    # ventana 3D (arranca en los tacometros), sin consola; pregunta edad/sexo/peso
+hrdash                    # ventana 3D con menu previo (INICIAR para empezar); pregunta edad/sexo/peso
+hrdash --now              # 3D sin menu: empieza a rodar ya (scripts, pruebas)
 hrdash --ascii            # la consola de siempre (TUI) en la terminal
 hrdash --3d               # 3D explicito: si no hay GL o pantalla, falla en vez de caer a --ascii
 hrdash --3d-view pista    # 3D con otra vista inicial (hr, watts, gauge, pista); repetible para partir
@@ -48,9 +49,11 @@ hrdash --duration 30      # modo headless: 30 s de muestreo + grabación (para s
 hrdash --fresh            # vuelve a preguntar aunque haya config guardada
 ```
 
-Por defecto `hrdash` abre la **ventana 3D sin consola**: el motor muestrea y graba igual,
+Por defecto `hrdash` abre la **ventana 3D sin consola**, primero en un **menu**: las fuentes
+conectan y muestran su valor en vivo, pero **no se graba nada hasta pulsar INICIAR** (clic, Enter o
+Espacio; `q` o Esc salen sin grabar). Con `--now` se salta el menu. Una vez iniciado, el motor muestrea y graba igual,
 la terminal solo muestra una linea de estado y el resumen al salir (`q` en la ventana o
-Ctrl+C en la terminal graban FIT + CSV). Arranca en los tacometros; dentro de la ventana
+Ctrl+C en la terminal graban FIT + CSV). Tras el menu arranca en los tacometros; dentro de la ventana
 `←`/`→` rotan entre vistas (FC → watts → tacometros → pista) y `h`/`w`/`g`/`p` saltan a
 una, `3`/`r` abren o cierran el tablero o la pista, `v` cambia la camara, `i` muestra u
 oculta los tacometros de la pista, `+`/`-` o la rueda hacen zoom y `x`/`s` reinician o

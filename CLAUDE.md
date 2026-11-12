@@ -78,6 +78,29 @@ with `draw_text(align="c")` (ink width) and digits with `digits_extent`, never w
 `text_w`/`digits_w` (they include trailing gaps and blank cells). Keep dial text at z = 0.06:
 a higher z shifts it under perspective in the bottom dials.
 
+## Pre-session menu (phase 1 of `docs/plans/menu-entrenamiento.md`)
+
+`Engine(menu=True)` starts in `phase = "menu"`: sources connect and are readable (`menu_info`) but
+`poll()` records nothing until `begin()` (new `Session`/`LapTracker`, simulator clock and trainer
+distance reset). The snapshot carries `phase` and, only then, `menu`. The child draws `menuview`
+(HUD layers, ortho camera) and answers with `{"ui": {"act": id}}`; widget layout is the pure
+`menu_widgets(menu, aspect)`, shared by drawing and hit-testing. In the menu phase the window
+must ignore every view key (otherwise `g`/arrows bypass Play); `cmd_3d` polls at 10 Hz there.
+`winkey()` must use the pointer address (`ctypes.cast(win, c_void_p).value`): glfw-python's window
+is `LP__GLFWwindow` with no `.value`, and `id(win)` differs per callback, which silently broke
+`slot_under()` (wheel, drag-orbit, focus, menu hover). Test input with XTest through `ctypes`
+(`libXtst`) under Xvfb: real keys and pointer events, no `xdotool` needed. A background `&`
+process in a non-interactive script ignores SIGINT: close the app with `q`, not `kill -INT`.
+
+## Workout plans
+
+`workouts.py` is the pure model for the pre-session menu feature (plan:
+`docs/plans/menu-entrenamiento.md`): `Block`/`Repeat` -> `Workout`, `at(t)` for "which block am I
+in", `resolve_target` (power if present, else HR, else stopwatch only), presets, and
+`to_dict`/`to_toml_inline` for `config.toml` and the window protocol. No UI/BLE imports; keep it
+that way so it stays checkable headless. `Repeat.between` goes *between* repetitions, not after
+the last one.
+
 ## Other drawing modules
 
 `pixels.py` is the shared braille framebuffer (2×4 px per cell, z-ordered) used by

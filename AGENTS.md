@@ -35,7 +35,7 @@ already saved.
 ## Architecture (what is not obvious from filenames)
 
 - `cli.py` forks into five paths: `--scan`, `--probe`, `--duration` (headless), 3D standalone
-  (the default, also `--3d`) and TUI (`--ascii`). Without an explicit mode, if `gl_unavailable()`
+  (the default, also `--3d`; opens on a pre-session menu, `--now` skips it) and TUI (`--ascii`). Without an explicit mode, if `gl_unavailable()`
   reports missing GL packages or no display, it falls back to the TUI. The 3D and TUI paths
   persist the last sensor/trainer on exit.
 - `ble.py` sources are async tasks; BLE notify callbacks **write plain attributes** (`latest_hr`,

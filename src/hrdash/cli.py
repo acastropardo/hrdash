@@ -7,6 +7,7 @@ import asyncio
 import importlib.util
 import os
 import sys
+import time
 
 from . import __version__
 from .ble import (SensorSource, SimSensor, TrainerSource, probe,
@@ -52,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
                             "consola; falla si el 3D no esta disponible")
     modes.add_argument("--ascii", action="store_true",
                        help="consola (TUI de Textual) en la terminal, sin ventana 3D")
+    p.add_argument("--now", action="store_true",
+                   help="modo 3D: salta el menu y empieza a rodar ya (scripts, pruebas)")
     p.add_argument("--simulate", action="store_true",
                    help="sensor+rodillo simulados (sin BLE) para probar el dashboard")
     p.add_argument("--3d-view", choices=list(SCENES_VIEWS), action="append",
@@ -188,9 +191,12 @@ def cmd_tui(hr_source, tr_source, cfg: Config) -> int:
 
 
 async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None = None,
-                 host=None) -> int:
+                 host=None, menu: bool = False) -> int:
     """Modo 3D (por defecto o `--3d`): motor + ventana, sin TUI. No hay terminal al que
     reenviar teclas.
+
+    Con `menu=True` la ventana abre en el menu previo: las fuentes conectan y se ven en vivo, pero
+    no se graba nada hasta que la ventana manda `{"ui": {"act": "play"}}` (clic o Enter).
 
     El motor es el dueño del estado (Session/LapTracker/export); la ventana es un proceso
     hijo que habla JSON por tuberia (proto.py). La ventana gestiona aqui su teclado y su
@@ -204,34 +210,45 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     """
     from .glview import GLHost
     host = host or GLHost()
-    eng = Engine(hr_source, tr_source, cfg)
+    eng = Engine(hr_source, tr_source, cfg, menu=menu)
     eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
     if not host.start():
         print(f"3D: {host.error or '3D no disponible: pip install -e \".[gl]\"'}")
         return 2
     eng.start()
-    print(f"3D standalone · vistas: {'+'.join(eng.views)} · FC={getattr(hr_source, 'name', '')}"
+    print(f"3D standalone · {'menu -> ' if menu else ''}vistas: {'+'.join(eng.views)} · FC={getattr(hr_source, 'name', '')}"
           + (f" · rodillo={getattr(tr_source, 'name', '')}" if tr_source else "")
           + " · `q` en la ventana o Ctrl+C para salir y grabar · `v` camara · `i` tacometros")
     warned = False
     quit_now = False
     opened = False        # primer mensaje `win` del hijo: la ventana existe
     never_opened = False  # err antes de win: sin display, esta ruta no tiene sentido
+    last_push = 0.0
     try:
         while seconds is None or seconds > 0:
-            await asyncio.sleep(1.0)
+            # En el menu se sondea a 10 Hz (un clic no puede esperar 1 s) y el snapshot sale a
+            # ~2 Hz mas uno inmediato tras cada evento; rodando, todo a 1 Hz como siempre.
+            tick = 0.1 if eng.phase == "menu" else 1.0
+            await asyncio.sleep(tick)
             s, closed = eng.poll()
             if seconds is not None:
-                seconds -= 1
-            try:
-                host.push(eng.snapshot())
-            except Exception as exc:  # noqa: BLE001 - la ventana no interrumpe el muestreo
-                if not warned:
-                    print(f"3D push: {type(exc).__name__}: {exc}"[:80])
-                    warned = True
+                seconds -= tick
+            now = time.monotonic()
+            if eng.phase != "menu" or now - last_push >= 0.5:
+                last_push = now
+                try:
+                    host.push(eng.snapshot())
+                except Exception as exc:  # noqa: BLE001 - la ventana no interrumpe el muestreo
+                    if not warned:
+                        print(f"3D push: {type(exc).__name__}: {exc}"[:80])
+                        warned = True
+            ui_changed = False
             for m in host.drain():
                 if m.get("win"):
                     opened = True
+                ui = m.get("ui")
+                if isinstance(ui, dict) and eng.handle_ui(ui):
+                    ui_changed = True
                 if m.get("key") and eng.handle_key(m["key"]):
                     quit_now = True
                     break
@@ -246,6 +263,12 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
                     if not warned:
                         print(f"3D: {m['err']}"[:80])
                         warned = True
+            if ui_changed:                   # la ventana ve el cambio de fase sin esperar al tick
+                last_push = time.monotonic()
+                try:
+                    host.push(eng.snapshot())
+                except Exception:  # noqa: BLE001
+                    pass
             if quit_now or never_opened:
                 break
             if not host.alive():
@@ -264,10 +287,14 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
         task = asyncio.current_task()
         if task is not None and hasattr(task, "uncancel"):
             task.uncancel()
-        print("\n3D: Ctrl+C, grabando...")
+        print("\n3D: Ctrl+C" + (", grabando..." if eng.phase != "menu" else ""))
     finally:
         await eng.stop()
         host.stop()
+    if eng.phase == "menu":                  # salio del menu sin pulsar Play: no hay sesion
+        persist_last(eng.hr, eng.tr, cfg)
+        print("Saliste del menu sin iniciar: no se grabo nada.")
+        return 2 if never_opened else 0
     res = eng.export()
     print_summary(eng.session, res)
     persist_last(eng.hr, eng.tr, cfg)
@@ -359,7 +386,7 @@ def main(argv=None) -> int:
         # Si el entorno no da para GL, cmd_3d avisa y sale con 2 (la TUI no se toca).
         # El dest de "--3d-view" es "3d_view", no un identificador valido: getattr.
         return asyncio.run(cmd_3d(hr_source, tr_source, cfg,
-                                  getattr(args, "3d_view") or ["gauge"]))
+                                  getattr(args, "3d_view") or ["gauge"], menu=not args.now))
 
     if not sys.stdout.isatty():
         print("La consola (--ascii) necesita un terminal interactivo. Usa --duration para "
