@@ -131,6 +131,17 @@ distance continuous); key `space` is forwarded to the engine only in standalone 
 (in the menu it activates the focused widget). `cluster.pause_hud` sends one empty mesh on resume so the
 window drops the banner.
 
+## Dual monitor (phase 6)
+
+`--dual` (child arg, `GLHost(dual=True)`) opens one fullscreen window per view when there is a monitor
+per view (`dual_assign`: monitors sorted top-to-bottom by desktop position, views by
+`VIEW_MONITOR_ORDER`, pista first); otherwise the usual split, with a note in the terminal. The primary
+window (created first, hosts the menu) is moved with `set_window_monitor`; the others are created with
+`share=primary` and their own moderngl context (a second `create_context` works with Mesa; the memo that
+says it kills the child is about *recreating* the primary). Only the primary has vsync and it swaps last.
+`AUTO_ICONIFY` is off, otherwise clicking the other fullscreen window minimises this one. Test without a
+second screen: `HRDASH_FAKE_MONITORS="x,y,w,h;x,y,w,h"` (windowed rectangles inside Xvfb).
+
 ## Workout plans
 
 `workouts.py` is the pure model for the pre-session menu feature (plan:

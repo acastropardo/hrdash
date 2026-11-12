@@ -417,3 +417,30 @@ Factible. Lo que ya hay y lo que falta:
 - Riesgo principal: dos contextos GL por proceso en macOS (CoreVideo/vsync por pantalla). Alternativa
   si falla: una sola ventana sin bordes que ocupe los dos monitores apilados (solo funciona si macOS
   tiene desactivado "las pantallas tienen Spaces independientes").
+
+## Estado de la fase 6 (hecha en Linux/Xvfb; falta probarla con dos pantallas reales)
+
+`hrdash --dual --3d-view pista --3d-view gauge` (o en cualquier orden): una ventana por vista, cada una
+a pantalla completa en su monitor, con la pista en el de arriba. Sin `--dual` nada cambia.
+
+- **Asignacion por posicion** (`glview._monitor_rects`, `dual_assign`): los monitores se ordenan por su
+  posicion en el escritorio (de arriba a abajo y de izquierda a derecha), no por el orden de GLFW; las
+  vistas siguen `VIEW_MONITOR_ORDER` (pista, tacometros, FC, watts), asi que la pista cae en el monitor
+  de arriba pidas el orden que pidas. Hace falta un monitor por vista; si no, ventana partida como siempre
+  y la terminal avisa ("doble monitor pedido pero hay N pantalla(s) para M vistas").
+- **El menu sigue en una sola ventana** (la primaria, en el monitor principal). Al pulsar Play la primaria
+  se muda a su monitor (`set_window_monitor`) y se abre la segunda ventana, con contexto compartido
+  (`share`) y su propio contexto moderngl, programa y VAOs.
+- **Vsync**: solo la primaria espera al refresco; las demas van con `swap_interval(0)` y se intercambian
+  antes. El tope de ~16 ms del bucle sigue valiendo.
+- **`AUTO_ICONIFY` apagado** para todas las ventanas: con pantalla completa en dos monitores, un clic en
+  una hacia que la otra se minimizara.
+- Cada ventana dibuja su HUD: la tira del plan, el arco objetivo y el cartel PAUSA salen en las dos.
+  Teclas, rueda y arrastre actuan sobre la ventana que tiene el foco.
+- Prueba sin dos pantallas: `HRDASH_FAKE_MONITORS="0,0,1920,540;0,540,1920,540"` simula monitores
+  apilados dentro de un Xvfb (ventanas normales en cada rectangulo, sin pantalla completa). Verificado:
+  `--now`, menu -> Play -> dos ventanas, pausa en ambas, un solo monitor -> ventana partida con el
+  aviso, y sin `--dual` como antes. No cubre pantalla completa real ni vsync por pantalla.
+- Sin hot-plug: los monitores se leen al abrir.
+- **Pendiente en tu Mac**: pantalla completa en el segundo monitor (Spaces), fluidez con dos contextos y
+  que un clic en una ventana no minimice la otra.
