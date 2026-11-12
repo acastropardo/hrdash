@@ -102,18 +102,34 @@ INFIELD = (0.106, 0.122, 0.149)
 # en el fragment shader es una funcion de (s, q) = (metros desde meta, metros desde el
 # borde interior), filtrada con fwidth para que de lejos se promedie en vez de hacer moire.
 SLAT, SLAT_L, SLAT_J = 0.05, 4.0, 0.0025  # liston: ancho, largo, junta (m)
-DECK_STEP = 0.5                           # subdivision lateral de la malla de cubierta (m)
-# Lineas pintadas, medidas desde el borde interior: (centro, color, ancho).
-PAINT = ((0.10, "AZUR", 0.20), (0.24, "LINE_BLACK", 0.05), (0.94, "LINE_RED", 0.05),
-         (4.30, "LINE_BLUE", 0.05), (9.95, "LINE_WHITE", 0.05))
-
-HALF_W = 5.0                         # ancho de pista: 8 calles de 1,22 m
-TRACK_LEN = 400.0                    # perimetro del trazado (a escala real, 1 u = 1 m)
-TRACK_W = 10.0                       # 0..10 es la coordenada lateral desde el borde interior
-DECK = 1.05                          # el tablon esta elevado sobre el piso del recinto
-WALL_H = 0.90                        # muro de seguridad sobre el borde exterior
+DECK_STEP = 0.25                 # subdivision lateral de la cubierta (m); a 45 grados, 0,5 torcia 11 mm
+# Velodromo cubierto de 250 m (estandar UCI de campeonatos y JJOO), 1 unidad = 1 m.
+# Parametrizacion de un 250 m real con transicion en espiral de Euler (clotoide): por
+# cuarto de vuelta 19 m de media recta + 13,5 m de clotoide + 30 m de medio arco, lo que da
+# R = (13,5 + 60) / pi ~ 23,40 m (las dos clotoides giran lo mismo que medio arco).
+# La longitud se mide sobre la linea de medicion.
+TRACK_LEN = 250.0
+STRAIGHT_L, TRANS_L, ARC_L = 38.0, 13.5, 60.0          # recta, clotoide y arco por curva
+TRACK_STEP = 0.5                     # muestreo del trazado (m): con R 23 y 45 grados, 1 m serrucha
+TRACK_W = 7.0                        # ancho del tablon (UCI: 7-8 m para 250 m)
+HALF_W = TRACK_W / 2.0
+COTE = 0.70                          # cote d'azur: franja azul bajo el borde interior (>= 10 %)
+AXIS_Q = 0.20                        # el trazado `pts` es la linea de medicion: 20 cm del borde
+BANK_S, BANK_C = math.radians(12.0), math.radians(45.0)   # peralte en recta y en el arco
+DECK = 1.05                          # nivel del pie de la cote d'azur sobre el piso del recinto
+WALL_H = 0.90                        # barandilla de seguridad sobre el borde exterior
 STAND_ROWS, STAND_RUN, STAND_RISE = 11, 0.85, 0.40      # gradas escalonadas
-ROOF_H, LAMP_H = 13.5, 6.5           # altura del cercho y de las lamparas colgadas
+# Las gradas no suben y bajan con el peralte: arrancan a la altura del borde exterior en el
+# arco, y en las rectas queda un muro (frontón) entre la barandilla y la primera fila.
+STAND_Z = DECK + (COTE + TRACK_W) * math.sin(BANK_C) + WALL_H
+ROOF_H, LAMP_H = STAND_Z + STAND_ROWS * STAND_RISE + 9.0, STAND_Z + 5.5
+APRON_W = 2.5                        # zona de seguridad llana al pie de la cote d'azur
+RIDER_Q = 0.50                       # linea del rider: justo encima de la negra (persecucion)
+# Lineas pintadas, medidas desde el borde interior: (centro, color, ancho). La negra (de
+# medicion) a 20 cm, la roja del sprinter a 85 cm, la azul del stayer a 1/3 del ancho o
+# 2,45 m (lo mayor) y la cote d'azur por debajo del borde.
+PAINT = ((-COTE / 2.0, "AZUR", COTE), (0.225, "LINE_BLACK", 0.05), (0.875, "LINE_RED", 0.05),
+         (max(TRACK_W / 3.0, 2.45) + 0.025, "LINE_BLUE", 0.05), (TRACK_W - 0.05, "LINE_WHITE", 0.05))
 CHASE_DIST = 2.4                    # chase por defecto; la rueda acerca hasta primera persona
 ZOOM_MIN, ZOOM_MAX = 0.20, 6.0
 STEP_ZOOM = 0.18                    # salto por notch de rueda
@@ -231,8 +247,8 @@ def build_deck(pts, warm) -> DeckMesh:
     """
     d = DeckMesh()
     n = len(pts) - 1
-    cols = int(round(TRACK_W / DECK_STEP))
-    qs = [TRACK_W * j / cols for j in range(cols + 1)]
+    cols = int(round((TRACK_W + COTE) / DECK_STEP))
+    qs = [-COTE + (TRACK_W + COTE) * j / cols for j in range(cols + 1)]
     rows = []
     for i, pt in enumerate(pts):
         s = TRACK_LEN * i / n
@@ -293,21 +309,23 @@ def _dial(frac: float) -> float:
 
 
 def _surf(pt, d, lift=0.0):
-    """Punto de la superficie a la distancia lateral `d` (medida desde el borde interior).
+    """Punto de la superficie a la distancia `d` medida sobre el tablon desde el borde
+    interior (negativa en la cote d'azur, hasta -COTE).
 
-    Devuelve (posicion, normal_de_superficie, normal_horizontal). La altura es
-    `DECK + tan(bank) * d`: `DECK` es el nivel del tablon sobre el piso del recinto, por eso
-    el muro se ve desde la pista; `bank` es por punto, así que en las rectas sale plano.
+    Devuelve (posicion, normal_de_superficie, normal_horizontal). `pts` es la linea de
+    medicion (`AXIS_Q`), asi que el desplazamiento horizontal es `(d - AXIS_Q) * cos(bank)`
+    y la altura `DECK + (d + COTE) * sin(bank)`: el ancho se mide sobre la pendiente. Con
+    `tan(bank) * d` (lo de antes, valido a 14 grados) a 45 grados la pista mediria 9,9 m.
 
-    `lift` levanta unos milimetros la banda: las lineas pintadas y los tablones se apoyan
-    sobre la capa base, y en el mismo plano el z-buffer elige al azar (z-fighting), que es
-    lo que salia como manchas.
+    `lift` levanta unos milimetros la banda a lo largo de la normal: las marcas apoyadas
+    sobre la cubierta, en el mismo plano, harian z-fighting.
     """
     x, y, tx, ty, bank = pt
     ln = math.hypot(tx, ty) or 1.0
     nx, ny = ty / ln, -tx / ln
     cb, sb = math.cos(bank), math.sin(bank)
-    p = (x + nx * (d - HALF_W), y + ny * (d - HALF_W), DECK + lift + math.tan(bank) * d)
+    o = (d - AXIS_Q) * cb - lift * sb
+    p = (x + nx * o, y + ny * o, DECK + (d + COTE) * sb + lift * cb)
     return p, (-nx * sb, -ny * sb, cb), (nx, ny)
 
 
@@ -634,42 +652,58 @@ def scene_gauge(snap, anim, aspect=1.6):
     return CLUSTER.build(snap, anim, aspect)
 
 
-def track(r=36.0, bank=math.radians(14.0), step=1.0):
-    """Trazado de 400 m tipo Londres/Monaco: dos rectas y dos curvas, sentido antihorario
-    (el de carrera), meta al final de la recta de meta (el punto que cierra la vuelta).
+def _kappa(s):
+    """Curvatura en `s` metros desde meta: meta al final de la recta de meta, luego
+    clotoide (curvatura lineal 0 -> 1/R), arco, clotoide de salida, recta, y otra curva."""
+    R = (TRANS_L + ARC_L) / math.pi
+    s = s % TRACK_LEN
+    for _ in range(2):
+        if s < TRANS_L:
+            return s / TRANS_L / R
+        s -= TRANS_L
+        if s < ARC_L:
+            return 1.0 / R
+        s -= ARC_L
+        if s < TRANS_L:
+            return (1.0 - s / TRANS_L) / R
+        s -= TRANS_L
+        if s < STRAIGHT_L:
+            return 0.0
+        s -= STRAIGHT_L
+    return 0.0
 
-    Muestreado a paso de 1 m para que la fraccion de vuelta sea distancia real y para que
-    las bandas estrechas (lineas pintadas y tablones) no serruchen en las curvas: con paso
-    de 2 m cada linea es un poligono y la junta se ve escalonada.
 
-    El peralte es solo en las curvas, con rampa de entrada y salida. La rampa no es lineal:
-    la transicion recta->peralte (el "flow" del que hablan los constructores) se suaviza con
-    coseno, que es lo que hace que la pista parezca construida y no extruida.
+def track(step=TRACK_STEP):
+    """Trazado de 250 m sobre la linea de medicion, sentido antihorario (el de carrera).
+
+    Se integra la curvatura (`_kappa`) por punto medio con subpasos de 2,5 cm, asi la
+    clotoide sale exacta y la fraccion de vuelta es distancia real. El peralte va ligado a
+    la curvatura (12 grados en recta, 45 en el arco): la propia clotoide hace la transicion
+    suave, sin rampa aparte. El error de cierre (micras) se reparte a lo largo de la vuelta.
     Cada punto: (x, y, tx, ty, bank). El ultimo punto repite el primero para cerrar.
     """
-    L = (TRACK_LEN - 2 * math.pi * r) / 2.0
-    half = L / 2.0
-    ns, nc = max(2, int(round(L / step))), max(2, int(round(math.pi * r / step)))
-    ds, dc = L / ns, math.pi * r / nc            # paso exacto de arco: la fraccion es distancia real
-    T = 0.25 * math.pi                           # tramo de transicion del peralte
-
-    def ramp(a):
-        t = min(min(1.0, a / T), min(1.0, (math.pi - a) / T))
-        return bank * 0.5 * (1.0 - math.cos(math.pi * t))
-
-    pts = []
-    for i in range(nc):                                   # curva derecha (empezamos en meta)
-        a = -math.pi / 2 + math.pi * i / nc
-        pts.append((half + r * math.cos(a), r * math.sin(a),
-                    -math.sin(a), math.cos(a), ramp(math.pi * i / nc)))
-    for i in range(ns):                                   # recta de arriba
-        pts.append((half - i * ds, r, -1.0, 0.0, 0.0))
-    for i in range(nc):                                   # curva izquierda
-        a = math.pi / 2 + math.pi * i / nc
-        pts.append((-half + r * math.cos(a), r * math.sin(a),
-                    -math.sin(a), math.cos(a), ramp(math.pi * i / nc)))
-    for i in range(ns):                                   # recta de meta, acaba en el punto 0
-        pts.append((-half + i * ds, -r, 1.0, 0.0, 0.0))
+    R = (TRANS_L + ARC_L) / math.pi
+    n = int(round(TRACK_LEN / step))
+    ds = TRACK_LEN / n
+    sub = max(1, int(round(ds / 0.025)))
+    h = ds / sub
+    x = y = th = 0.0
+    raw = []
+    for i in range(n):
+        s0 = i * ds
+        raw.append((x, y, th, _kappa(s0)))
+        for j in range(sub):
+            km = _kappa(s0 + (j + 0.5) * h)
+            thm = th + km * h * 0.5
+            x += math.cos(thm) * h
+            y += math.sin(thm) * h
+            th += km * h
+    ex, ey = x, y
+    xs = [r[0] - ex * i / n for i, r in enumerate(raw)]
+    ys = [r[1] - ey * i / n for i, r in enumerate(raw)]
+    cx, cy = (max(xs) + min(xs)) / 2.0, (max(ys) + min(ys)) / 2.0
+    pts = [(xs[i] - cx, ys[i] - cy, math.cos(r[2]), math.sin(r[2]),
+            BANK_S + (BANK_C - BANK_S) * min(1.0, r[3] * R)) for i, r in enumerate(raw)]
     pts.append(pts[0])                                    # cierra el trazado
     return pts
 
@@ -680,9 +714,10 @@ def _warm(col, t):
 
 
 def _lamps(pts):
-    """Lamparas colgadas del cercho: posiciones (x, y, z), una cada 6 m de cuerda."""
+    """Lamparas colgadas del cercho: posiciones (x, y, z), una cada 6 m de trazado."""
+    k = max(1, int(round(6.0 / TRACK_STEP)))
     return [(_surf(pt, HALF_W)[0][0], _surf(pt, HALF_W)[0][1], LAMP_H)
-            for pt in pts[:-1][::6]]
+            for pt in pts[:-1][::k]]
 
 
 def _pool(lamps):
@@ -723,15 +758,17 @@ def build_static(pts):
     # El tablon y las lineas pintadas a lo largo van en la capa `deck` (`build_deck`), con
     # su propio shader; aqui solo queda lo que no es cubierta.
 
-    # Apron: el hormigon pintado del interior, en el nivel del tablon. No sigue el peralte
-    # (es zona llana), por eso no se puede usar ribbon, que inclina con bank.
+    # Zona de seguridad (apron): hormigon pintado y llano al pie de la cote d'azur. No sigue
+    # el peralte, por eso no se puede usar ribbon. Su borde interior baja al piso con un muro.
     for i in range(n):
-        p0, _n0, h0 = _surf(pts[i], 0.0)
-        p1, _n1, h1 = _surf(pts[i + 1], 0.0)
-        a0 = (p0[0] - h0[0] * 1.8, p0[1] - h0[1] * 1.8, DECK)
-        a1 = (p1[0] - h1[0] * 1.8, p1[1] - h1[1] * 1.8, DECK)
+        p0, _n0, h0 = _surf(pts[i], -COTE)
+        p1, _n1, h1 = _surf(pts[i + 1], -COTE)
+        a0 = (p0[0] - h0[0] * APRON_W, p0[1] - h0[1] * APRON_W, DECK)
+        a1 = (p1[0] - h1[0] * APRON_W, p1[1] - h1[1] * APRON_W, DECK)
         cs = (_warm(APRON, warm(a0)), _warm(APRON, warm(a1)), _warm(APRON, warm(p1)), _warm(APRON, warm(p0)))
         m.vquad(a0, a1, p1, p0, cs, (0.0, 0.0, 1.0))
+        g0, g1 = (a0[0], a0[1], 0.0), (a1[0], a1[1], 0.0)
+        m.quad(g0, g1, a1, a0, _warm(WALL, warm(a0)), (-h0[0], -h0[1], 0.0))
 
     # Marcas transversales UCI. La meta no es un damero: es una banda blanca con una linea
     # negra fina en el centro, en el punto que cierra la vuelta. La linea de 200 m (blanca)
@@ -739,7 +776,7 @@ def build_static(pts):
     # interior) estan a mitad de cada recta.
     _cross(m, pts, 0.0, META_W, META, 0.0, TRACK_W, warm, 0.012)
     _cross(m, pts, 0.0, LINE_W, LINE_BLACK, 0.0, TRACK_W, warm, 0.014)
-    _cross(m, pts, -200.0, LINE_W, META, 0.0, TRACK_W, warm, 0.012)
+    _cross(m, pts, TRACK_LEN - 200.0, LINE_W, META, 0.0, TRACK_W, warm, 0.012)
     for s_mid in _straight_mids(pts):
         _cross(m, pts, s_mid, LINE_W, LINE_RED, 0.0, TRACK_W / 2.0, warm, 0.012)
 
@@ -768,7 +805,8 @@ def _straight_mids(pts):
     n = len(pts) - 1
     runs, start = [], None
     for i in range(n + 1):
-        straight = i < n and pts[i][4] == 0.0 and pts[i][2:4] == pts[(i + 1) % n][2:4]
+        straight = i < n and abs(_kappa(i * TRACK_LEN / n)) < 1e-9 \
+            and abs(_kappa((i + 1) * TRACK_LEN / n)) < 1e-9
         if straight and start is None:
             start = i
         elif not straight and start is not None:
@@ -778,23 +816,23 @@ def _straight_mids(pts):
 
 
 def _structure(m, pts, warm) -> None:
-    """Muro perimetral y muro de seguridad: el tablon esta elevado sobre el piso del recinto.
+    """Barandilla de seguridad sobre el borde exterior y fronton hasta la primera fila.
 
-    Sin esta pieza la pista flota sobre un vacio negro, que es lo que hace que el render
-    parezca bajo aunque las proporciones sean correctas.
+    En el arco la barandilla llega casi a la grada; en las rectas (12 grados) el borde
+    exterior queda ~5 m mas bajo y lo que se ve detras es el muro que sostiene las gradas.
     """
     n = len(pts) - 1
     for i in range(n):
-        p0, nrm0, h0 = _surf(pts[i], 0.0)
-        p1, nrm1, h1 = _surf(pts[i + 1], 0.0)
-        g0 = (p0[0] - h0[0] * 0.45, p0[1] - h0[1] * 0.45, 0.0)
-        g1 = (p1[0] - h1[0] * 0.45, p1[1] - h1[1] * 0.45, 0.0)
-        m.quad(g0, g1, p1, p0, _warm(WALL, warm(g0)), (-h0[0], -h0[1], 0.0))
         t0, tnrm, ht0 = _surf(pts[i], TRACK_W)
         t1, _, ht1 = _surf(pts[i + 1], TRACK_W)
         s0 = (t0[0] + ht0[0] * 0.30, t0[1] + ht0[1] * 0.30, t0[2] + WALL_H)
         s1 = (t1[0] + ht1[0] * 0.30, t1[1] + ht1[1] * 0.30, t1[2] + WALL_H)
         m.quad(t0, t1, s1, s0, _warm(WALL, warm(t0)), tnrm)
+        f0 = (s0[0] + ht0[0] * 0.3, s0[1] + ht0[1] * 0.3, s0[2])
+        f1 = (s1[0] + ht1[0] * 0.3, s1[1] + ht1[1] * 0.3, s1[2])
+        if STAND_Z - min(f0[2], f1[2]) > 0.05:
+            m.quad(f0, f1, (f1[0], f1[1], STAND_Z), (f0[0], f0[1], STAND_Z),
+                   _warm(SEAT_F, warm(f0)), (-ht0[0], -ht0[1], 0.0))
 
 
 def _stands(m, pts, warm) -> None:
@@ -804,15 +842,16 @@ def _stands(m, pts, warm) -> None:
     def row(pt, r):
         p, _n, h = _surf(pt, TRACK_W)
         k = 0.6 + r * STAND_RUN
-        return (p[0] + h[0] * k, p[1] + h[1] * k, p[2] + WALL_H + r * STAND_RISE)
+        return (p[0] + h[0] * k, p[1] + h[1] * k, STAND_Z + r * STAND_RISE)
 
     for i in range(n):
         for r in range(STAND_ROWS):
             a, b = row(pts[i], r), row(pts[i + 1], r)
             c, d = row(pts[i + 1], r + 1), row(pts[i], r + 1)
             m.quad(a, b, c, d, _warm(SEAT_F, warm(a)), (0.0, 0.0, 1.0))
-    for i in range(0, n, 2):
-        block = i // 12
+    every = max(1, int(round(2.0 / TRACK_STEP)))        # butaca cada 2 m de trazado
+    for i in range(0, n, every):
+        block = int(i * TRACK_STEP) // 12
         if block % 5 == 3:
             continue                                        # pasillo entre bloques
         for r in range(STAND_ROWS):
@@ -829,14 +868,15 @@ def _roof(m, pts, lamps, warm) -> None:
     El techo es lo que cierra la escena desde primera persona: sin el, el cuadro se llena de
     vacio y la luz del shader no tiene de donde venir visualmente.
     """
-    idx = list(range(0, len(pts) - 1, 5))
+    idx = list(range(0, len(pts) - 1, max(1, int(round(5.0 / TRACK_STEP)))))
+    eave = STAND_Z + STAND_ROWS * STAND_RISE + 2.5         # alero por encima de la ultima fila
 
     def arch(i):
         p, _n, h = _surf(pts[i], HALF_W)
-        a = (p[0] - h[0] * (HALF_W + 14.0), p[1] - h[1] * (HALF_W + 14.0), ROOF_H * 0.45)
+        a = (p[0] - h[0] * (HALF_W + 14.0), p[1] - h[1] * (HALF_W + 14.0), eave)
         b = (p[0], p[1], ROOF_H)
         k = HALF_W + STAND_ROWS * STAND_RUN + 5.0
-        c = (p[0] + h[0] * k, p[1] + h[1] * k, ROOF_H * 0.45)
+        c = (p[0] + h[0] * k, p[1] + h[1] * k, eave)
         return a, b, c
 
     ribs = [arch(i) for i in idx]
@@ -849,7 +889,7 @@ def _roof(m, pts, lamps, warm) -> None:
             m.quad(b, b1, c1, c, _warm(ROOF, warm(b)), (0.0, 0.0, 1.0))
     for lp in lamps:
         m.box(lp[0], lp[1], lp[2], 0.34, 0.34, 0.14, LAMP, 0.0, 1.0)
-        top = (lp[0], lp[1], ROOF_H * 0.45 + (ROOF_H - ROOF_H * 0.45) * 0.4)
+        top = (lp[0], lp[1], eave + (ROOF_H - eave) * 0.4)
         m.segment((lp[0], lp[1], lp[2] + 0.07), top, 0.02, STEEL, 0.1, sides=4)
 
 
@@ -884,7 +924,6 @@ HEAD = (0.50, 1.235)                      # centro de la cabeza (la camara POV v
 CRANK, THIGH, SHIN = 0.165, 0.44, 0.42
 ANKLE = (-0.06, 0.10)                     # tobillo respecto al eje del pedal (pie plano)
 HIP_W, PEDAL_W, SHO_W, ELB_W = 0.09, 0.11, 0.165, 0.085       # separaciones laterales
-Q_RIDER = -3.0                            # linea del rider: 3 m dentro del eje de pista
 BODY_L = 0.12                             # emisivo leve: el cuerpo no se hunde en negro de canto
 
 
@@ -1166,7 +1205,8 @@ def _rider(base, fwd, up, lat, theta, roll, kit, pov=False) -> "ArrMesh":
 
 
 def scene_pista(snap, anim, aspect=1.6):
-    """Pista de 400 m a escala real (1 unidad = 1 m): dos rectas, dos curvas peraltadas.
+    """Velodromo de 250 m a escala real (1 unidad = 1 m): rectas a 12 grados, clotoides y
+    arcos a 45 grados.
 
     Lo fijo (tablon, lineas pintadas, meta, muro, gradas, cerchos y lamparas) se construye
     una vez y se conserva como capa estatica; por frame solo cambian el rider, la estela y
@@ -1219,7 +1259,7 @@ def scene_pista(snap, anim, aspect=1.6):
     up = (-nx * sb, -ny * sb, cb)                          # normal del plano inclinado
     lat = (nx * cb, ny * cb, sb)                           # lateral sobre la superficie
     fwd = (fx, fy, 0.0)
-    base = (bx + nx * Q_RIDER, by + ny * Q_RIDER, DECK + math.tan(bank) * (Q_RIDER + HALF_W))
+    base = _surf((bx, by, btx, bty, bank), RIDER_Q)[0]
     # Estela por posiciones reales: al pararse deja de crecer y se desvanece (no avanza
     # por detrás de un rider que ya esta quieto). Es una pegatina sobre el madera, no una
     # caja flotando 2 cm encima, que era lo que la hacía leer como basura.
@@ -1301,8 +1341,11 @@ def _at(pts, f):
     i = min(n - 1, max(0, int(f * n)))
     k = f * n - i
     x0, y0, tx0, ty0, b0 = pts[i]
-    x1, y1, _tx1, _ty1, _b1 = pts[i + 1]
-    return (x0 + (x1 - x0) * k, y0 + (y1 - y0) * k, tx0, ty0, b0)
+    x1, y1, tx1, ty1, b1 = pts[i + 1]
+    # Tangente y peralte tambien interpolados: a 45 grados un salto de peralte cada 0,5 m
+    # se ve como un tembleque del ciclista.
+    return (x0 + (x1 - x0) * k, y0 + (y1 - y0) * k, tx0 + (tx1 - tx0) * k,
+            ty0 + (ty1 - ty0) * k, b0 + (b1 - b0) * k)
 
 
 SCENES = {"hr": scene_hr, "watts": scene_watts, "gauge": scene_gauge, "pista": scene_pista}

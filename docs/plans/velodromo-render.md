@@ -103,6 +103,29 @@ Captura lateral: se lee como un muneco de palos, no como un ciclista.
 - Muro y gradas se apoyan en el borde exterior real (con 45 deg queda a ~5 m de altura,
   hay que subir gradas y cerchos).
 
+**Estado: hecha** (despues de las fases 0, 2 y 3).
+
+- `track()` integra la curvatura `_kappa(s)` (recta 38 m, clotoide 13,5 m, arco 60 m, por
+  curva) por punto medio con subpasos de 2,5 cm sobre la linea de medicion, muestreada cada
+  0,5 m (`TRACK_STEP`). R = (13,5 + 60) / pi = 23,3958 m (ojo: las dos clotoides giran lo
+  mismo que medio arco; con `2 * TRANS_L` sale R 27,7 y la vuelta no cierra). Medido:
+  249,997 m, rumbo continuo (salto max 1,22 grados entre muestras), caja 98 x 47 m.
+- Peralte ligado a la curvatura: 12 grados en recta, 45 en el arco (velocidad de diseno
+  sqrt(g R tan 45) ~ 54 km/h). `_at()` interpola ahora tambien tangente y peralte.
+- `_surf()` mide el ancho sobre la pendiente (`cos`/`sin`); con `tan(bank) * d` la pista
+  de 7 m mediria 9,9 a 45 grados. `pts` es la linea de medicion (`AXIS_Q` = 0,20 m).
+- Ancho 7 m, cote d'azur de 0,70 m bajo el borde interior (parte de la cubierta, q < 0),
+  zona de seguridad llana de 2,5 m con muro al piso. Lineas: negra a 0,20, roja a 0,85,
+  azul a max(ancho/3, 2,45). Linea de 200 m a s = 50.
+- Gradas a altura fija (`STAND_Z`, borde exterior del arco + barandilla); en las rectas
+  un fronton entre barandilla y primera fila. Cercho y lamparas subidos (`ROOF_H`, `LAMP_H`
+  derivados de `STAND_Z`); lamparas, cerchos y butacas por metros, no por indice.
+- Rider sobre `RIDER_Q` = 0,50 m (encima de la negra) con `_surf`, sin la formula aparte.
+- `DECK_STEP` 0,5 -> 0,25: a 45 grados la torsion de quad llegaba a 11 mm (ahora 5,3 mm).
+  Tris: 29,7k estaticos + 31k de cubierta.
+- Pendiente para la Fase 4: a 38 km/h el ciclista va muy por debajo de la velocidad de
+  diseno de la curva y en la chase de curva la camara queda desplazada hacia dentro.
+
 ### Fase 2 - tablon por shader
 
 - Programa aparte para la cubierta con atributo `(s, q)` (avance, lateral). El fragment
