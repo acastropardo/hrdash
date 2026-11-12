@@ -2200,59 +2200,81 @@ def child_main() -> None:
             moderngl detecta el contexto de cada ventana, y si no se vuelve al split sin
             matar el hijo.
             """
-            nonlocal primary, multi_mode, dual_told
+            nonlocal primary, multi_mode, dual_told, dual
 
             rects = _monitor_rects(glfw, mons) if dual else []
             assign = dual_assign(list(views), rects) if dual else None
-            if dual and len(views) >= 2 and not dual_told:
+            if dual and len(views) >= 2 and assign is None and not dual_told:
                 dual_told = True
-                _emit({"dual": assign is not None, "monitors": len(rects)})
+                _emit({"dual": False, "monitors": len(rects),
+                       "why": "monitores insuficientes" if rects else "no se pudo leer los monitores"})
             multi_mode = assign is not None
             if multi_mode:
-                if primary is None:
-                    make_primary(rects[0])
-                win0, cx0, prog0, _sz = primary
-                for view in sorted(views, key=lambda v: assign[v]):
-                    j = assign[view]
-                    mon, (xa, ya, wa, ha) = rects[j]
-                    old = by_view.get(view)
-                    if old is not None and old[2] == (0.0, 0.0, 1.0, 1.0) and old[7:] == (j,):
-                        yield old[:7]
-                        continue
-                    # Monitor real: pantalla completa en el, como la ventana unica. `mon` None (monitor
-                    # simulado de las pruebas): ventana normal en su rectangulo.
-                    mode = glfw.get_video_mode(mon) if mon is not None else None
-                    size = (int(mode.size.width), int(mode.size.height)) if mode else (int(wa), int(ha))
-                    if j == 0:
-                        win, cx, prog = win0, cx0, prog0
-                        if old is not None:                   # venia de otra disposicion
+                built, made = [], []
+                try:
+                    if primary is None:
+                        make_primary(rects[0])
+                    win0, cx0, prog0, _sz = primary
+                    for view in sorted(views, key=lambda v: assign[v]):
+                        j = assign[view]
+                        mon, (xa, ya, wa, ha) = rects[j]
+                        old = by_view.get(view)
+                        if old is not None and old[2] == (0.0, 0.0, 1.0, 1.0) and old[7:] == (j,):
+                            built.append(old[:7])
+                            continue
+                        # Monitor real: pantalla completa en el, como la ventana unica. `mon` None
+                        # (monitor simulado de las pruebas): ventana normal en su rectangulo.
+                        mode = glfw.get_video_mode(mon) if mon is not None else None
+                        size = (int(mode.size.width), int(mode.size.height)) if mode else (int(wa), int(ha))
+                        if j == 0:
+                            win, cx, prog = win0, cx0, prog0
+                            if old is not None:                   # venia de otra disposicion
+                                glfw.make_context_current(win)
+                                for va in old[6].values():
+                                    va.release()
+                            try:                                  # la primaria se muda a su monitor
+                                glfw.set_window_monitor(win, mon, int(xa), int(ya), size[0], size[1],
+                                                        glfw.DONT_CARE)
+                            except Exception:  # noqa: BLE001 - ubicar es decorativo
+                                pass
+                        else:
+                            win = _mkwin(glfw, size, f"HRDash 3D - {view}", mon, win0)
+                            if win is None:
+                                raise RuntimeError("glfw no pudo crear la ventana")
+                            made.append(win)
+                            try:
+                                glfw.set_window_pos(win, int(xa), int(ya))
+                            except Exception:  # noqa: BLE001
+                                pass
                             glfw.make_context_current(win)
-                            for va in old[6].values():
-                                va.release()
-                        try:                                  # la primaria se muda a su monitor
-                            glfw.set_window_monitor(win, mon, int(xa), int(ya), size[0], size[1],
-                                                    glfw.DONT_CARE)
-                        except Exception:  # noqa: BLE001 - ubicar es decorativo
-                            pass
-                    else:
-                        win = _mkwin(glfw, size, f"HRDash 3D - {view}", mon, win0)
-                        if win is None:
-                            raise RuntimeError("glfw no pudo crear la ventana")
+                            bind(win)
+                            glfw.swap_interval(0)               # solo la primaria espera al vsync
+                            cx = moderngl.create_context()
+                            prog = cx.program(vertex_shader=VS, fragment_shader=FS)
+                        _emit({"win": list(size), "fb": list(glfw.get_framebuffer_size(win)),
+                               "view": view, "rect": [0.0, 0.0, 1.0, 1.0], "monitor": j})
+                        slot = (view, win, (0.0, 0.0, 1.0, 1.0), cx, prog, _new_anim(), {})
+                        by_view[view] = slot + (j,)
+                        built.append(slot)
+                except Exception as exc:  # noqa: BLE001 - sin segunda ventana: ventana partida, no morir
+                    for w in made:
                         try:
-                            glfw.set_window_pos(win, int(xa), int(ya))
+                            glfw.destroy_window(w)
                         except Exception:  # noqa: BLE001
                             pass
-                        glfw.make_context_current(win)
-                        bind(win)
-                        glfw.swap_interval(0)               # solo la primaria espera al vsync
-                        cx = moderngl.create_context()
-                        prog = cx.program(vertex_shader=VS, fragment_shader=FS)
-                    _emit({"win": list(size), "fb": list(glfw.get_framebuffer_size(win)),
-                           "view": view, "rect": [0.0, 0.0, 1.0, 1.0], "monitor": j})
-                    slot = (view, win, (0.0, 0.0, 1.0, 1.0), cx, prog, _new_anim(), {})
-                    by_view[view] = slot + (j,)
-                    yield slot
-                return
+                    for v in [v for v, sl in by_view.items() if len(sl) > 7]:
+                        by_view.pop(v, None)
+                    dual, multi_mode = False, False
+                    if not dual_told:
+                        dual_told = True
+                        _emit({"dual": False, "monitors": len(rects),
+                               "why": f"{type(exc).__name__}: {exc}"[:90]})
+                else:
+                    if not dual_told:
+                        dual_told = True
+                        _emit({"dual": True, "monitors": len(rects)})
+                    yield from built
+                    return
 
             if primary is None:                            # ventana unica: se crea la primaria
                 make_primary()
