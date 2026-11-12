@@ -107,17 +107,31 @@ def digits_w(s: str, h: float) -> float:
 
 
 def text_w(s: str, h: float) -> float:
-    """Ancho de una cadena en la fuente 5x7 (para centrar)."""
+    """Avance total de una cadena en la fuente 5x7 (incluye el hueco tras la ultima letra)."""
     return len(s) * _charw(h) if s else 0.0
 
 
+def ink_w(s: str, h: float) -> float:
+    """Ancho del trazo real: sin el hueco final y con el ancho de los trazos gordos.
+
+    Centrar con `text_w` desplaza el texto ~0,2 h hacia la izquierda (el hueco tras la
+    ultima letra cuenta como texto); el trazo de la primera columna sale 0,59 px a la izquierda
+    de `gx` y el de la ultima 4,59 px a la derecha de su `gx`.
+    """
+    return ((len(s) - 1) * _charw(h) + 5.18 * h / 7.0) if s else 0.0
+
+
 def draw_text(mesh, x, y, z, h, s, col, light=0.0, align="l", depth=0.03) -> None:
-    """Escribe `s` en fuente pixel 5x7 con trazos gordos y alivio poco profundo."""
-    if align == "c":
-        x -= text_w(s, h) / 2.0
-    elif align == "r":
-        x -= text_w(s, h)
+    """Escribe `s` en fuente pixel 5x7 con trazos gordos y alivio poco profundo.
+
+    `y` es el centro vertical de las letras. `align` "c"/"r" centra o alinea a la derecha
+    el trazo real (`ink_w`); con "l" `x` es el origen de la primera celda, como siempre.
+    """
     px = h / 7.0
+    if align == "c":
+        x += -ink_w(s, h) / 2.0 + 0.59 * px
+    elif align == "r":
+        x += -ink_w(s, h) + 0.59 * px
     cw = _charw(h)
     for i, ch in enumerate(s.upper()):
         g = FONT.get(ch)
@@ -137,6 +151,34 @@ def draw_text(mesh, x, y, z, h, s, col, light=0.0, align="l", depth=0.03) -> Non
                 mesh.box(gx + (c + run / 2.0 - 0.5) * px, y + (3.0 - row) * px, z,
                          run * px + px * 0.18, px * 0.82, depth, col, light=light)
                 c += run
+
+
+def digits_extent(s: str, h: float):
+    """(izquierda, derecha) del trazo real de un valor en 7 segmentos, respecto de `x`.
+
+    Un `1` solo pinta el lado derecho de su celda: centrar por celdas deja un hueco a la
+    izquierda en "148". Aqui se mide el trazo de cada caracter.
+    """
+    w, t = h * 0.58, h * 0.14
+    step = w + h * 0.28
+    gx, lo, hi = 0.0, None, None
+    for ch in s:
+        if ch == ".":
+            a, b, adv = gx, gx + t, step * 0.45
+        elif ch == ":":
+            a, b, adv = gx, gx + t, step * 0.55
+        elif ch == " " or ch not in SEG:
+            a = b = None
+            adv = step
+        elif SEG[ch] == "bc":
+            a, b, adv = gx + w - t / 2, gx + w + t / 2, step
+        else:
+            a, b, adv = gx - t / 2, gx + w + t / 2, step
+        if a is not None:
+            lo = a if lo is None else min(lo, a)
+            hi = b if hi is None else max(hi, b)
+        gx += adv
+    return (lo or 0.0, hi or 0.0)
 
 
 def draw_digits(mesh, x, y, z, h, s, col, light=0.9) -> None:
@@ -179,11 +221,93 @@ def _brighten(col, f=1.35):
     return (min(1.0, col[0] * f), min(1.0, col[1] * f), min(1.0, col[2] * f))
 
 
+# ---- disposicion interior de un dial (todo en unidades de radio: r = 1) ----
+# La cara tiene un arco de 270 grados con palitos entre 0,63 y 0,80 y la banda de zonas hasta
+# 0,95; abajo queda una cuña libre (de -135 a -45 grados) que las agujas nunca barren. Ahi van
+# la lectura digital, la unidad y el nombre/media, apilados; los numeros de la escala van por
+# dentro de los palitos. Cada texto se ajusta (`_fit`) para que quepa en la cara y no pise
+# palitos ni los extremos del arco: se achica solo lo necesario.
+FACE = 0.93                       # radio maximo de cualquier texto (la cara llega a 1,0)
+TICK_IN = 0.60                    # radio interior de los palitos menos margen
+WEDGE = (math.radians(-127.0), math.radians(-53.0))   # cuña libre (los extremos estan a -135/-45)
+READ_Y, READ_H = -0.385, 0.18     # lectura digital: centro y alto preferido
+UNIT_Y, UNIT_H = -0.605, 0.115    # unidad (BPM, KM/H...)
+ROW3_Y, ROW3_H = -0.795, 0.08     # nombre del dial (grandes) o media "MED nn" (chicos)
+NUM_GAP = 0.09                    # aire minimo entre numeros de la escala
+NUM_H = 0.12                      # numeros de la escala
+
+
+def _box_ok(cx, cy, w, h) -> bool:
+    """La caja (centro, ancho, alto; r = 1) cabe en la cara y, si llega a la zona de palitos,
+    queda dentro de la cuña libre de abajo."""
+    for sx in (-0.5, 0.5):
+        for sy in (-0.5, 0.5):
+            x, y = cx + sx * w, cy + sy * h
+            rad = math.hypot(x, y)
+            if rad > FACE:
+                return False
+            if rad > TICK_IN and not (WEDGE[0] <= math.atan2(y, x) <= WEDGE[1]):
+                return False
+    return True
+
+
+def _fit(cy, h_pref, width, cx=0.0, floor=0.45) -> float:
+    """Mayor alto <= h_pref (a pasos de 7 %) con el que `width(h)` cabe en `cy`; si ni con
+    `floor * h_pref` cabe, devuelve ese minimo (la prueba de diseno lo marcaria)."""
+    h = h_pref
+    while h > h_pref * floor and not _box_ok(cx, cy, width(h), h):
+        h *= 0.93
+    return h
+
+
+def _scale_labels(lo, hi, major, minor):
+    """[(texto, angulo, alto, radio)] de los numeros de la escala, sin solaparse entre si.
+
+    El radio sale de pedir que la caja del numero entre en TICK_IN (no solo su centro: un
+    "160" a la derecha es ancho y antes se montaba sobre los palitos); si no cabe sin
+    acercarse al eje, se achica.
+    """
+    if not (minor and hi > lo and major):
+        return []
+    cands = []
+    v = math.ceil(lo / minor) * minor
+    while v <= hi + 1e-9:
+        frac = (v - lo) / (hi - lo)
+        if abs(v / major - round(v / major)) < 1e-9 and 0.05 < frac < 0.95:
+            cands.append((str(int(round(v))), _dial(frac), int(round(v / major))))
+        v += minor
+    for k in range(1, len(cands) + 1):
+        boxes = []
+        # solo los multiplos de k mayores: salen numeros redondos (80, 120, 160), no 60, 100, 140
+        for txt, a, _i in [cd for cd in cands if cd[2] % k == 0]:
+            h = NUM_H
+            while True:
+                w = ink_w(txt, h)
+                # radio mas grande con el que las 4 esquinas siguen dentro de TICK_IN (la esquina
+                # lejana tiene ademas componente perpendicular: proyectar solo en radial no basta)
+                rr = TICK_IN - 0.5 * (abs(math.cos(a)) * w + abs(math.sin(a)) * h)
+                while rr >= 0.30 and any(
+                        math.hypot(rr * math.cos(a) + sx * w / 2, rr * math.sin(a) + sy * h / 2) > TICK_IN
+                        for sx in (-1, 1) for sy in (-1, 1)):
+                    rr -= 0.004
+                if rr >= 0.30 or h < NUM_H * 0.5:
+                    break
+                h *= 0.93
+            boxes.append((txt, a, h, rr))
+        ok = all(abs(p[3] * math.cos(p[1]) - q[3] * math.cos(q[1])) >= (ink_w(p[0], p[2]) + ink_w(q[0], q[2])) / 2 + NUM_GAP
+                 or abs(p[3] * math.sin(p[1]) - q[3] * math.sin(q[1])) >= (p[2] + q[2]) / 2 + NUM_GAP
+                 for i, p in enumerate(boxes) for q in boxes[i + 1:])
+        if ok:
+            return boxes
+    return []
+
+
 def dial_static(m, r, lo, hi, segs, major, minor, label, unit, big=True):
     """Cara, bisel, banda de zonas, palitos, numeros y etiquetas.
 
     Estructura de tacometro: banda de zonas en la corona, palitos por dentro, numeros
-    todavia mas adentro, lectura digital en el hueco de las 12 y nombre/unidad abajo.
+    todavia mas adentro y, en la cuña libre de abajo, lectura digital (capa de valores),
+    unidad y nombre. La disposicion y los tamanos salen de `_fit` (ver arriba).
     """
     m.disc(0, 0, 0.0, r * 1.06, (0.115, 0.128, 0.150), segs=76)   # corona externa
     m.disc(0, 0, 0.014, r, (0.205, 0.225, 0.255), segs=76)              # cara
@@ -205,30 +329,15 @@ def dial_static(m, r, lo, hi, segs, major, minor, label, unit, big=True):
             g += 0.004
             if f0 == f1:
                 break
-    if minor and hi > lo and major:
-        rr = r * 0.62
-        # paso de etiqueta: se salta mayores si sus numeros no caben uno al lado del otro
-        a0 = _dial(0.5)
-        a1 = _dial(0.5 + major / max(1e-6, hi - lo))
-        chord = math.hypot(rr * (math.cos(a1) - math.cos(a0)), rr * (math.sin(a1) - math.sin(a0)))
-        need = text_w("888", r * 0.12) * 1.40
-        k = max(1, int(math.ceil(need / max(1e-6, chord))))
-        v = math.ceil(lo / minor) * minor
-        while v <= hi + 1e-9:
-            frac = (v - lo) / (hi - lo)
-            if (abs(v / major - round(v / major)) < 1e-9 and 0.05 < frac < 0.95
-                    and int(round(v / major)) % k == 0):
-                a = _dial(frac)
-                s = str(int(round(v)))
-                draw_text(m, math.cos(a) * rr - text_w(s, r * 0.12) / 2,
-                          math.sin(a) * rr - r * 0.06, 0.06, r * 0.13, s, INK, light=0.9)
-            v += minor
-    # unidad y nombre en el hueco de las 6 en punto (ahi no llegan palitos ni numeros)
-    draw_text(m, -text_w(unit, r * 0.19) / 2, -r * 0.56, 0.06, r * 0.19, unit,
-              INK, light=0.9)
+    for txt, a, h, rr in _scale_labels(lo, hi, major, minor):
+        draw_text(m, math.cos(a) * rr * r, math.sin(a) * rr * r, 0.06, r * h, txt, INK,
+                  light=0.9, align="c")
+    # unidad y nombre en la cuña de abajo (ahi no llegan palitos, numeros ni agujas)
+    hu = _fit(UNIT_Y, UNIT_H, lambda h: ink_w(unit, h))
+    draw_text(m, 0.0, UNIT_Y * r, 0.06, r * hu, unit, INK, light=0.9, align="c")
     if big:
-        draw_text(m, -text_w(label, r * 0.13) / 2, -r * 0.80, 0.06, r * 0.13, label,
-                  DIM, light=0.8)
+        hl = _fit(ROW3_Y, ROW3_H, lambda h: ink_w(label, h))
+        draw_text(m, 0.0, ROW3_Y * r, 0.06, r * hl, label, DIM, light=0.8, align="c")
 
 
 _TICKS: dict = {}
@@ -297,22 +406,34 @@ def dial_frame(m, r, value, lo, hi, major, minor, redline, col_now, alarm, cache
     m.ring(0, 0, 0.185, r * 0.065, r * 0.105, col_now, segs=28, light=0.95)
 
 
-def dial_values(m, r, digits, dh, alarm, avg=None):
-    """Capa por snapshot: lectura digital encima del eje central (cambia a 1 Hz).
+def dial_values(m, r, digits, alarm, avg=None):
+    """Capa por snapshot: lectura digital bajo el eje (cambia a 1 Hz) y, en los diales chicos,
+    la media ("MED nn") en la fila de abajo.
 
-    Usa el mismo cuerpo de letra que los numeros grises de la escala (r*0.13) para que
-    la cara del dial respire; la unidad y el nombre del dial van debajo del cubo.
+    La lectura va en la cuña libre de abajo, no encima del eje: ahi la cruzaba la aguja y los
+    numeros de la escala. Se centra por el trazo real (`digits_extent`: un `1` inicial solo pinta
+    el lado derecho de su celda) y se achica si el valor es ancho (1034 W, 63,7 km/h).
     """
-    h = r * dh
-    total = digits_w(digits, h)
-    draw_digits(m, -total / 2, r * 0.22, 0.22, h, digits, RED if alarm else AMBER, light=0.95)
+    txt = digits.strip()
+    h = _fit(READ_Y, READ_H, lambda hh: (lambda e: e[1] - e[0])(digits_extent(txt, hh)))
+    lo, hi = digits_extent(txt, h * r)
+    # Misma profundidad que el resto del texto del dial (0,06): a 0,22 la perspectiva lo corria
+    # hacia abajo en los diales de la parte baja de la pantalla y se pegaba a la unidad.
+    draw_digits(m, -(lo + hi) / 2.0, READ_Y * r, 0.06, h * r, txt, RED if alarm else AMBER,
+                light=0.95)
     if avg is not None:
-        s = "%3d" % round(avg) if avg >= 10 else "%3.1f" % avg
-        hh = r * 0.13
-        tot = digits_w(s, hh)
-        draw_text(m, -text_w("MED", hh) - tot / 2 - hh * 0.6, -r * 0.78, 0.06, hh, "MED",
-                  DIM, light=0.85)
-        draw_digits(m, -tot / 2, -r * 0.78, 0.06, hh, s, (0.75, 0.80, 0.86), light=0.85)
+        sv = "%d" % round(avg) if avg >= 10 else "%.1f" % avg
+        gap = 0.75                                    # espacio entre "MED" y el valor, en alto
+        def width(hh):
+            vl, vh = digits_extent(sv, hh)
+            return ink_w("MED", hh) + gap * hh + (vh - vl)
+        hh = _fit(ROW3_Y, 0.095, width)
+        vl, vh = digits_extent(sv, hh * r)
+        tot = width(hh) * r
+        x0 = -tot / 2.0
+        draw_text(m, x0 + 0.59 * hh * r / 7.0, ROW3_Y * r, 0.06, hh * r, "MED", DIM, light=0.85)
+        draw_digits(m, x0 + ink_w("MED", hh * r) + gap * hh * r - vl, ROW3_Y * r, 0.06, hh * r, sv,
+                    (0.75, 0.80, 0.86), light=0.85)
 
 
 # ---------------------------------------------------------------- cluster
@@ -381,7 +502,7 @@ class Cluster:
         for which, cx, cz, r, _label, _unit in DIALS:
             one = Mesh()
             one.panel(cx, cz)
-            dial_values(one, r, _digits_for(which, vals[which]), 0.13,
+            dial_values(one, r, _digits_for(which, vals[which]),
                         alarm and which == "hr", avg=avgs.get(which))
             m.merge(one)
         zc = _hex(snap.get("zone_color") or "#ef4444")
@@ -654,7 +775,7 @@ def hud_layers(snap, anim, aspect):
         for which, (cx, cy, r, _l, _u) in lay.items():
             one = Mesh()
             one.panel(cx, cy)
-            dial_values(one, r, _digits_for(which, vals[which]), 0.15, alarm and which == "hr")
+            dial_values(one, r, _digits_for(which, vals[which]), alarm and which == "hr")
             m.merge(one)
         dist_m = float(snap.get("dist_km") or 0) * 1000.0
         cells = (_clock(snap.get("elapsed_s") or 0), "%.2f" % (dist_m / 1000.0),

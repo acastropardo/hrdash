@@ -70,6 +70,14 @@ new that is rebuilt per frame in pure Python must fit the ~16 ms budget together
 slot (measured: gauge ~3 ms, pista ~7 ms). Plans and
 offscreen-render checks for this work are in `docs/plans/velodromo-render.md`.
 
+## Dial text layout
+
+Texts inside a dial (`cluster.dial_static` / `dial_values`) are laid out in radius units and
+fitted by `_fit`/`_box_ok` so they stay inside the face and out of the tick ring; centre text
+with `draw_text(align="c")` (ink width) and digits with `digits_extent`, never with
+`text_w`/`digits_w` (they include trailing gaps and blank cells). Keep dial text at z = 0.06:
+a higher z shifts it under perspective in the bottom dials.
+
 ## Other drawing modules
 
 `pixels.py` is the shared braille framebuffer (2×4 px per cell, z-ordered) used by
