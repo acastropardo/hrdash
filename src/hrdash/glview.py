@@ -1833,10 +1833,10 @@ def child_main() -> None:
                     glfw.KEY_ENTER: "enter", glfw.KEY_KP_ENTER: "enter",
                     glfw.KEY_SPACE: "space", glfw.KEY_ESCAPE: "escape",
                     glfw.KEY_UP: "up", glfw.KEY_DOWN: "down", glfw.KEY_TAB: "tab",
-                    glfw.KEY_B: "b"}
+                    glfw.KEY_B: "b", glfw.KEY_1: "1", glfw.KEY_2: "2"}
         # Teclas que solo significan algo en el menu: fuera de el no se reenvian a la TUI (con
         # `simulate_key` un Tab o un Enter moverian el foco de la consola).
-        MENU_ONLY = ("enter", "space", "escape", "up", "down", "tab", "b")
+        MENU_ONLY = ("enter", "space", "escape", "up", "down", "tab", "b", "1", "2")
         slots: list = []
         # En standalone (`--3d`) no hay TUI: la ventana es la dueña de la vista y del zoom,
         # y solo reenvia al motor lo que afecta a la sesion (q/x/s). `standalone` y
@@ -1962,18 +1962,19 @@ def child_main() -> None:
             if phase == "menu":                  # en el menu el clic izquierdo pulsa el widget
                 if button == glfw.MOUSE_BUTTON_LEFT and action == PRESS:
                     try:
-                        from .menuview import hit_id
+                        from .menuview import hit_act, hit_id
                         px, py = glfw.get_cursor_pos(win)
                         wpts, hpts = glfw.get_window_size(win)
-                        wid = hit_id(snap.get("menu"), (px / float(wpts), 1.0 - py / float(hpts)),
-                                     wpts / float(hpts))
+                        nxy = (px / float(wpts), 1.0 - py / float(hpts))
+                        wid = hit_id(snap.get("menu"), nxy, wpts / float(hpts))
+                        act = hit_act(snap.get("menu"), nxy, wpts / float(hpts))
                     except Exception:  # noqa: BLE001 - ventana cerrada durante el clic
-                        wid = None
-                    if wid:
+                        wid = act = None
+                    if wid and act:
                         got = menu_slot(win)
                         if got is not None:
                             got[0]["menu_focus"] = wid
-                        _emit({"ui": {"act": wid}})
+                        _emit({"ui": {"act": act}})
                 return
             if action == PRESS:
                 s = slot_under(win)
@@ -2039,12 +2040,15 @@ def child_main() -> None:
         def menu_key(win, name):
             """Teclado del menu: flechas/Tab mueven el foco, Enter/Espacio lo activan, B busca,
             Q/Esc salen sin grabar. El foco inicial es INICIAR."""
-            from .menuview import activate, focus_or_default, move_focus
+            from .menuview import activate, focus_or_default, focused_stepper, move_focus
             if name in ("q", "escape"):
                 _emit({"key": "q"})              # salir del menu sin grabar nada
                 return
             if name == "b":
                 _emit({"ui": {"act": "scan"}})
+                return
+            if name in ("1", "2"):               # pestanas: 1 sensores, 2 sesion
+                _emit({"ui": {"act": "page:" + ("sensores" if name == "1" else "sesion")}})
                 return
             got = menu_slot(win)
             if got is None:
@@ -2057,6 +2061,10 @@ def child_main() -> None:
                 anim["menu_focus"] = move_focus(widgets, cur, -1)
             elif name in ("enter", "space"):
                 act = activate(widgets, cur)
+                if act:
+                    _emit({"ui": {"act": act}})
+            elif name in ("left", "right") and focused_stepper(widgets, cur):
+                act = activate(widgets, cur, -1 if name == "left" else 1)   # ajusta el valor
                 if act:
                     _emit({"ui": {"act": act}})
 
