@@ -75,6 +75,7 @@ SNAPSHOT_KEYS = {
     "lap_m": "int",
     "lap_frac": "num",
     "zoom_cmd": "list",
+    "cam_cmd": "int",
 }
 
 # Mensajes por stdout del hijo. El engine de `cli.cmd_3d` procesa `key` (q/x/s), `views`
@@ -151,7 +152,8 @@ def layers_to_json(layers) -> list:
 
 
 def build_snapshot(session, config, laps, hr_source, tr_source,
-                   view="hr", views=None, zoom_cmd=(0, 0), standalone=False) -> dict:
+                   view="hr", views=None, zoom_cmd=(0, 0), standalone=False,
+                   cam_cmd=0) -> dict:
     """Construye el snapshot. Es el unico builder: lo usan la TUI y el motor, para que
     el esquema no se duplique y el harness valide una sola fuente."""
     hr = int(session.current_hr or (getattr(hr_source, "latest_hr", None) or 0))
@@ -193,4 +195,5 @@ def build_snapshot(session, config, laps, hr_source, tr_source,
         "wcolors": list(W_COLORS),
         "lap_m": int(laps.lap_m), "lap_frac": float(laps.frac),
         "zoom_cmd": list(zoom_cmd),
+        "cam_cmd": int(cam_cmd),
     }

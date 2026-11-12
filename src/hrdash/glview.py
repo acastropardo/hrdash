@@ -96,6 +96,14 @@ RIB = (0.349, 0.380, 0.420)               # cerchos de madera laminada
 ROOF = (0.190, 0.172, 0.145)              # cupula: gris calido, no neutro
 LAMP = (0.941, 0.863, 0.651)              # lamparas calidas colgadas
 INFIELD = (0.106, 0.122, 0.149)
+INFIELD_FLOOR = (0.235, 0.275, 0.330)     # suelo deportivo de la zona interior
+COURT_LINE = (0.80, 0.82, 0.86)
+# Publicidad: (fondo, logo). Colores planos saturados, como las vallas de un velodromo.
+AD_COLS = [((0.08, 0.18, 0.45), (0.92, 0.93, 0.95)), ((0.70, 0.10, 0.12), (0.95, 0.92, 0.85)),
+           ((0.93, 0.93, 0.95), (0.10, 0.25, 0.60)), ((0.95, 0.72, 0.10), (0.10, 0.10, 0.12)),
+           ((0.06, 0.06, 0.07), (0.95, 0.55, 0.10)), ((0.05, 0.45, 0.30), (0.92, 0.95, 0.92))]
+AD_L = 6.0                                # largo de cada panel de la barandilla (m)
+PITS = 8                                  # boxes de equipos en la zona interior
 
 # Cubierta por shader (Fase 2): un velodromo real es de listones de pino de 4-5 cm a lo
 # largo de la marcha, con testas escalonadas. Como geometria eso serian cientos de cintas;
@@ -130,6 +138,8 @@ LINE_FAST, LINE_SLOW, LINE_STOP = 34.0, 18.0, 10.0     # km/h
 COTE_Q, APRON_Q = -COTE / 2.0, -COTE - 1.0              # linea en la cote d'azur y en el apron
 LINE_RATE = 0.6                      # deriva lateral maxima (m/s)
 LEAN_MAX, LEAN_RATE = math.radians(55.0), 1.2           # inclinacion maxima y su velocidad (rad/s)
+CAM_MODES = ("chase", "tv", "grua")  # `v` los recorre en la ventana o en la TUI
+TV_CAMS = 8                          # camaras fijas de la zona interior (una cada 31 m)
 CAM_LEAN = 0.5                       # la chase se inclina la mitad que el rider
 APRON_W = 2.5                        # zona de seguridad llana al pie de la cote d'azur
 RIDER_Q = 0.50                       # linea del rider: justo encima de la negra (persecucion)
@@ -273,34 +283,105 @@ def build_deck(pts, warm) -> DeckMesh:
     return d
 
 
-_DECK_PROGS: dict = {}
+SHADOW_VS = """#version 330
+in vec3 in_position; in vec2 in_rk;
+out vec2 v_rk;
+uniform mat4 mvp;
+void main(){ gl_Position = mvp * vec4(in_position, 1.0); v_rk = in_rk; }"""
+
+# Sombra de contacto suave: se dibuja con mezcla multiplicativa (DST_COLOR, ZERO), asi que
+# el color de salida es el factor por el que se oscurece lo de debajo (el tablon del shader).
+SHADOW_FS = """#version 330
+in vec2 v_rk;
+out vec4 o;
+void main(){
+    float a = 1.0 - smoothstep(0.0, 1.0, v_rk.x);
+    o = vec4(vec3(1.0 - v_rk.y * a * a), 1.0);
+}"""
 
 
-def _deck_prog(ctx):
-    """Programa de la cubierta para este contexto (uno por contexto, compilado una vez).
-    Devuelve None si no compila: el llamador cae a `DeckMesh.to_mesh()`."""
-    got = _DECK_PROGS.get(id(ctx))
+class ShadowMesh:
+    """Sombras de contacto (`fmt = "shadow"`): elipses en abanico, (posicion, (r, fuerza)).
+
+    El disco negro de antes se leia como un agujero; el degradado radial con mezcla
+    multiplicativa oscurece la madera sin taparla. Sin su programa no se dibuja (`to_mesh`
+    vacio): sin sombra el rider se ve igual, solo menos apoyado.
+    """
+
+    __slots__ = ("v",)
+    fmt = "shadow"
+
+    def __init__(self):
+        self.v: list[float] = []
+
+    def ellipse(self, c, ax, ay, a, b, k, segs=20) -> None:
+        ring = [tuple(c[j] + a * math.cos(t) * ax[j] + b * math.sin(t) * ay[j] for j in range(3))
+                for t in (2 * math.pi * i / segs for i in range(segs + 1))]
+        for p0, p1 in zip(ring, ring[1:]):
+            self.v.extend((*c, 0.0, k, *p0, 1.0, k, *p1, 1.0, k))
+
+    def to_mesh(self) -> "Mesh":
+        return Mesh()
+
+    @property
+    def tris(self) -> int:
+        return len(self.v) // 15
+
+
+# Formatos de vertice propios: (vertex shader, fragment shader (funcion), VATTR, campos).
+FORMATS = {
+    "deck": (DECK_VS, lambda: _deck_fs(), DECK_VATTR, DECK_FIELDS),
+    "shadow": (SHADOW_VS, lambda: SHADOW_FS, "3f 2f", ("in_position", "in_rk")),
+}
+_FMT_PROGS: dict = {}
+_VA_FMT: dict = {}                        # id(VAO) -> formato, para el estado de mezcla
+
+
+def _fmt_prog(ctx, fmt):
+    """Programa del formato `fmt` para este contexto (compilado una vez por contexto).
+    Devuelve None si no compila: el llamador cae a `mesh.to_mesh()`."""
+    got = _FMT_PROGS.get((id(ctx), fmt))
     if got is not None and got[0] is ctx:
         return got[1]
+    vs, fs, _attr, _fields = FORMATS[fmt]
     try:
-        prog = ctx.program(vertex_shader=DECK_VS, fragment_shader=_deck_fs())
+        prog = ctx.program(vertex_shader=vs, fragment_shader=fs())
     except Exception as exc:  # noqa: BLE001 - un shader que no compila no tumba la ventana
-        _emit({"warn": f"cubierta sin shader: {type(exc).__name__}: {exc}"[:300]})
+        _emit({"warn": f"{fmt} sin shader: {type(exc).__name__}: {exc}"[:300]})
         prog = None
-    _DECK_PROGS[id(ctx)] = (ctx, prog)
+    _FMT_PROGS[(id(ctx), fmt)] = (ctx, prog)
     return prog
 
 
 def _upload(ctx, prog, mesh, np, moderngl):
     """VAO de una capa con el programa y el formato que pide la malla."""
-    if getattr(mesh, "fmt", None) == "deck":
-        dprog = _deck_prog(ctx)
-        if dprog is not None:
-            buf = ctx.buffer(np.asarray(mesh.v if len(mesh.v) else [0.0] * 9, dtype="f4").tobytes())
-            return ctx.vertex_array(dprog, [(buf, DECK_VATTR, *DECK_FIELDS)]), dprog
+    fmt = getattr(mesh, "fmt", None)
+    if fmt in FORMATS:
+        fprog = _fmt_prog(ctx, fmt)
+        if fprog is not None:
+            _vs, _fs, attr, fields = FORMATS[fmt]
+            width = sum(int(t[:-1]) for t in attr.split())
+            buf = ctx.buffer(np.asarray(mesh.v if len(mesh.v) else [0.0] * width, dtype="f4").tobytes())
+            va = ctx.vertex_array(fprog, [(buf, attr, *fields)])
+            _VA_FMT[id(va)] = fmt
+            return va, fprog
         mesh = mesh.to_mesh()
     buf = ctx.buffer(np.asarray(mesh.v if len(mesh.v) else [0.0] * 10, dtype="f4").tobytes())
-    return ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)]), prog
+    va = ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)])
+    _VA_FMT[id(va)] = None
+    return va, prog
+
+
+def _draw(ctx, vaos, moderngl) -> None:
+    """Dibuja las capas en orden; las sombras con mezcla multiplicativa sobre lo ya pintado."""
+    for va in vaos.values():
+        if _VA_FMT.get(id(va)) == "shadow":
+            ctx.enable(moderngl.BLEND)
+            ctx.blend_func = (moderngl.DST_COLOR, moderngl.ZERO)
+            va.render(moderngl.TRIANGLES)
+            ctx.disable(moderngl.BLEND)
+        else:
+            va.render(moderngl.TRIANGLES)
 
 
 def _hex(col) -> tuple[float, float, float]:
@@ -789,6 +870,7 @@ def build_static(pts):
         _cross(m, pts, s_mid, LINE_W, LINE_RED, 0.0, TRACK_W / 2.0, warm, 0.012)
 
     _structure(m, pts, warm)
+    _infield(m, pts, warm)
     _stands(m, pts, warm)
     _roof(m, pts, lamps, warm)
     return m
@@ -824,23 +906,86 @@ def _straight_mids(pts):
 
 
 def _structure(m, pts, warm) -> None:
-    """Barandilla de seguridad sobre el borde exterior y fronton hasta la primera fila.
+    """Barandilla con paneles publicitarios y fronton (con lonas) hasta la primera fila.
 
     En el arco la barandilla llega casi a la grada; en las rectas (12 grados) el borde
     exterior queda ~5 m mas bajo y lo que se ve detras es el muro que sostiene las gradas.
+    Los paneles son de color liso con un "logo" claro: sin texto, pero se leen como
+    publicidad y dan escala y ritmo a la vuelta (sin ellos el muro es una banda continua).
     """
     n = len(pts) - 1
+    per = max(1, int(round(AD_L / TRACK_STEP)))             # muestras por panel
     for i in range(n):
-        t0, tnrm, ht0 = _surf(pts[i], TRACK_W)
+        t0, _tn, ht0 = _surf(pts[i], TRACK_W)
         t1, _, ht1 = _surf(pts[i + 1], TRACK_W)
         s0 = (t0[0] + ht0[0] * 0.30, t0[1] + ht0[1] * 0.30, t0[2] + WALL_H)
         s1 = (t1[0] + ht1[0] * 0.30, t1[1] + ht1[1] * 0.30, t1[2] + WALL_H)
-        m.quad(t0, t1, s1, s0, _warm(WALL, warm(t0)), tnrm)
+        inward = (-ht0[0], -ht0[1], 0.0)
+        panel = i // per
+        bg, fg = AD_COLS[(panel * 7) % len(AD_COLS)]
+        m.quad(t0, t1, s1, s0, _warm(bg, warm(t0)), inward, 0.10)
+        k = (i % per) / per
+        if 0.18 <= k < 0.82:                                # logo: 64 % del panel, centrado
+            lo, hi = 0.30, 0.72
+            q = [(p[0] - ht0[0] * 0.012 + (r[0] - p[0]) * f, p[1] - ht0[1] * 0.012 + (r[1] - p[1]) * f,
+                  p[2] + (r[2] - p[2]) * f)
+                 for p, r, f in ((t0, s0, lo), (t1, s1, lo), (t1, s1, hi), (t0, s0, hi))]
+            m.quad(*q, _warm(fg, warm(t0)), inward, 0.18)
         f0 = (s0[0] + ht0[0] * 0.3, s0[1] + ht0[1] * 0.3, s0[2])
         f1 = (s1[0] + ht1[0] * 0.3, s1[1] + ht1[1] * 0.3, s1[2])
         if STAND_Z - min(f0[2], f1[2]) > 0.05:
             m.quad(f0, f1, (f1[0], f1[1], STAND_Z), (f0[0], f0[1], STAND_Z),
-                   _warm(SEAT_F, warm(f0)), (-ht0[0], -ht0[1], 0.0))
+                   _warm(SEAT_F, warm(f0)), inward)
+            # Lona en el fronton de las rectas: banda horizontal bajo la primera fila.
+            z0, z1 = max(f0[2], f1[2]) + 0.6, STAND_Z - 0.5
+            if z1 - z0 > 1.0:
+                bg2, _fg2 = AD_COLS[((i // (2 * per)) * 3 + 1) % len(AD_COLS)]
+                g0 = (f0[0] - ht0[0] * 0.02, f0[1] - ht0[1] * 0.02)
+                g1 = (f1[0] - ht1[0] * 0.02, f1[1] - ht1[1] * 0.02)
+                m.quad((g0[0], g0[1], z0), (g1[0], g1[1], z0), (g1[0], g1[1], z1), (g0[0], g0[1], z1),
+                       _warm(bg2, warm(f0)), inward, 0.12)
+
+
+def _infield(m, pts, warm) -> None:
+    """Zona interior: suelo deportivo, pista de calentamiento marcada y boxes de equipos.
+
+    Antes era un vacio oscuro bajo la cote d'azur. En un velodromo real el interior tiene
+    los boxes de los equipos (biombo, banco y rodillo) a lo largo de la recta opuesta.
+    """
+    n = len(pts) - 1
+    ring = []
+    for i in range(n):
+        p, _n, h = _surf(pts[i], -COTE)
+        ring.append((p[0] - h[0] * APRON_W, p[1] - h[1] * APRON_W, 0.01))
+    for i in range(n):                                       # abanico desde el centro: es convexo
+        a, b = ring[i], ring[(i + 1) % n]
+        m.vtri((0.0, 0.0, 0.01), a, b, tuple(_warm(INFIELD_FLOOR, warm(q)) for q in ((0, 0, 0), a, b)),
+               (0.0, 0.0, 1.0))
+    # Lineas de una pista polideportiva centrada (28 x 15 m).
+    W, H, lw = 14.0, 7.5, 0.06
+    for x0, y0, x1, y1 in ((-W, -H, W, -H), (-W, H, W, H), (-W, -H, -W, H), (W, -H, W, H), (0, -H, 0, H)):
+        if y0 == y1:
+            m.quad((x0, y0 - lw, 0.02), (x1, y1 - lw, 0.02), (x1, y1 + lw, 0.02), (x0, y0 + lw, 0.02),
+                   COURT_LINE, (0.0, 0.0, 1.0), 0.2)
+        else:
+            m.quad((x0 - lw, y0, 0.02), (x0 + lw, y0, 0.02), (x1 + lw, y1, 0.02), (x1 - lw, y1, 0.02),
+                   COURT_LINE, (0.0, 0.0, 1.0), 0.2)
+    # Boxes de equipos a lo largo de la recta opuesta (s ~ 92..120 m), mirando a la pista.
+    for k in range(PITS):
+        sm = 106.0 + (k - (PITS - 1) / 2.0) * 3.4
+        pt = _at(pts, sm / TRACK_LEN)
+        p, _n, h = _surf(pt, -COTE)
+        tx, ty = pt[2], pt[3]
+        c = (p[0] - h[0] * (APRON_W + 3.2), p[1] - h[1] * (APRON_W + 3.2))
+        yaw = math.atan2(ty, tx)
+        col = AD_COLS[(k * 5 + 2) % len(AD_COLS)][0]
+        w = _warm(col, warm((c[0], c[1], 0.0)))
+        m.box(c[0], c[1], 0.02, 3.0, 2.4, 0.02, _warm(col, 0.55), yaw)                   # alfombra
+        bx, by = c[0] - h[0] * 1.2, c[1] - h[1] * 1.2                                    # biombo
+        m.box(bx, by, 0.6, 3.0, 0.08, 1.2, w, yaw, 0.08)
+        sx, sy = c[0] - h[0] * 0.7, c[1] - h[1] * 0.7                                    # banco
+        m.box(sx, sy, 0.22, 1.6, 0.40, 0.44, STEEL, yaw, 0.05)
+        m.box(c[0] + h[0] * 0.3, c[1] + h[1] * 0.3, 0.12, 1.2, 0.5, 0.24, SHOE, yaw, 0.05)  # rodillo
 
 
 def _stands(m, pts, warm) -> None:
@@ -1212,6 +1357,26 @@ def _rider(base, fwd, up, lat, theta, roll, kit, pov=False) -> "ArrMesh":
     return ArrMesh(out)
 
 
+def _cam_broadcast(mode, pts, frac, base, fwd, nh):
+    """Camaras de retransmision (`v` las recorre): (ojo, mira, fovy).
+
+    - tv: `TV_CAMS` camaras fijas en la zona interior, a la altura de un tripode sobre el
+      apron. Se corta a la siguiente cuando el rider pasa la actual, y el zoom (fovy) sigue
+      la distancia para que el rider ocupe siempre lo mismo en el cuadro.
+    - grua: brazo por dentro de la pista que acompana al rider desde arriba y algo detras.
+    """
+    aim = (base[0], base[1], base[2] + 0.8)                 # al torso, no a las ruedas
+    if mode == "tv":
+        k = int(frac * TV_CAMS + 0.65) % TV_CAMS            # la proxima camara por delante
+        p, _n, h = _surf(_at(pts, k / TV_CAMS), -COTE)
+        o = APRON_W + 2.5
+        eye = (p[0] - h[0] * o, p[1] - h[1] * o, DECK + 2.0)
+        d = math.dist(eye, aim)
+        return eye, aim, max(0.08, min(1.0, 2.0 * math.atan(2.4 / max(d, 0.1))))
+    eye = (base[0] - nh[0] * 7.0 - fwd[0] * 4.0, base[1] - nh[1] * 7.0 - fwd[1] * 4.0, base[2] + 5.0)
+    return eye, aim, 0.50
+
+
 def _line_for(kmh):
     """Linea lateral (q, metros desde el borde interior) que toma el rider a `kmh`."""
     if kmh >= LINE_FAST:
@@ -1334,11 +1499,15 @@ def scene_pista(snap, anim, aspect=1.6):
         m.quad(*q, c, tuple(u1), 0.30 * fade)
 
     dist = min(ZOOM_MAX, max(ZOOM_MIN, float(anim.get("dist", CHASE_DIST))))
-    pov = dist < 0.5
-    # Sombras de contacto bajo las ruedas y el pedalier: sin anclaje al suelo la bici flota.
-    for c, r in ((REAR, 0.11), (FRONT, 0.11), ((0.0, 0.0), 0.17)):
-        p = tuple(base[j] + fwd[j] * c[0] + sup[j] * 0.006 for j in range(3))
-        m.plate(p, r, tuple(sup), SHADOW, 12, 0.0)
+    mode = CAM_MODES[int(anim.get("cam_mode", 0)) % len(CAM_MODES)]
+    pov = dist < 0.5 and mode == "chase"
+    # Sombras de contacto: una alargada bajo todo el conjunto y dos puntos donde apoyan las
+    # ruedas (se multiplican: el contacto queda mas oscuro). Sin anclaje la bici flota.
+    sh = ShadowMesh()
+    for c, a, b, k in ((((REAR[0] + FRONT[0]) / 2.0), 0.85, 0.26, 0.45),
+                       (REAR[0], 0.16, 0.07, 0.45), (FRONT[0], 0.16, 0.07, 0.45)):
+        p = tuple(base[j] + fwd[j] * c + sup[j] * 0.007 for j in range(3))
+        sh.ellipse(p, fwd, slat, a, b, k)
     rider = _rider(base, fwd, up, lat, anim["crank"], anim["roll"], col, pov=pov)
 
     # Inercia de la orbita: los eventos de arrastre llegan a 60-120 Hz y el frame va a ~50 fps;
@@ -1386,7 +1555,10 @@ def scene_pista(snap, anim, aspect=1.6):
         gaze = _rot(_rot(tuple(fwd[j] - pitch * cup[j] for j in range(3)), cup, yaw), pax, tilt)
 
     center = tuple(eye[j] + gaze[j] * ahead for j in range(3))
-    return layers + [("frame", m), ("rider", rider)], (eye, center, (0.0, 0.0, 1.0), fovy, 300.0)
+    if mode != "chase":
+        eye, center, fovy = _cam_broadcast(mode, pts, anim["frac"], base, fwd, (nx, ny))
+    return layers + [("frame", m), ("rider", rider), ("shadow", sh)], \
+        (eye, center, (0.0, 0.0, 1.0), fovy, 300.0)
 
 
 def _at(pts, f):
@@ -1584,6 +1756,7 @@ def child_main() -> None:
         press = {}                     # winkey(ventana) -> punto donde empezo el arrastre
         focus = {}                     # winkey(ventana) -> enfocada (sin foco no llegan teclas)
         nudge = None                   # nonce del ultimo paso de zoom que aplico el hijo
+        cam_seen = None                # contador de `v` de la TUI ya aplicado
         primary = None                 # (win, ctx, prog, size): la ventana que no se recrea
         by_view = {}                     # view -> slot: persiste entre cambios de vista
         multi_mode = None              # ventana por monitor; se decide con el primer layout
@@ -1594,7 +1767,8 @@ def child_main() -> None:
                     glfw.KEY_3: "3", glfw.KEY_R: "r",
                     glfw.KEY_LEFT: "left", glfw.KEY_RIGHT: "right",
                     glfw.KEY_LEFT_BRACKET: "[", glfw.KEY_RIGHT_BRACKET: "]",
-                    glfw.KEY_MINUS: "-", glfw.KEY_EQUAL: "+"}     # `+` es KEY_EQUAL (sin shift)
+                    glfw.KEY_MINUS: "-", glfw.KEY_EQUAL: "+",     # `+` es KEY_EQUAL (sin shift)
+                    glfw.KEY_V: "v"}
         slots: list = []
         # En standalone (`--3d`) no hay TUI: la ventana es la dueña de la vista y del zoom,
         # y solo reenvia al motor lo que afecta a la sesion (q/x/s). `standalone` y
@@ -1720,6 +1894,9 @@ def child_main() -> None:
             name = KEYNAMES.get(key)
             if not name:
                 return
+            if name == "v":                  # camara de la pista: es estado de la ventana
+                cycle_cam()
+                return
             if standalone:
                 new = standalone_key(name, local_views)
                 if new is not None:
@@ -1730,6 +1907,14 @@ def child_main() -> None:
                              STEP_ZOOM * (1 if name == "+" else -1))
                     return
             _emit({"key": name})
+
+        def cycle_cam():
+            """Siguiente modo de camara (chase / tv / grua) en la vista pista."""
+            for s in slots:
+                if s[0] == "pista":
+                    s[5]["cam_mode"] = (int(s[5].get("cam_mode", 0)) + 1) % len(CAM_MODES)
+                    _emit({"cam": CAM_MODES[s[5]["cam_mode"]]})
+                    return
 
         def on_focus(win, focused):
             focus[winkey(win)] = bool(focused)
@@ -1913,6 +2098,11 @@ def child_main() -> None:
                     # primera linea JSON llega antes de crear la ventana, asi que no hay vista.
                     add_zoom(next((s for s in slots if s[0] in ZOOMABLE), None),
                              STEP_ZOOM * (1 if d > 0 else -1))
+            cc = snap.get("cam_cmd")                     # `v` en la TUI: contador, no valor
+            if isinstance(cc, int):
+                if cam_seen is not None and cc != cam_seen:
+                    cycle_cam()
+                cam_seen = cc
             if any(glfw.window_should_close(s[1]) for s in slots):
                 err = "ventana cerrada"
                 break
@@ -1948,8 +2138,7 @@ def child_main() -> None:
                         pr["EYE"].write(np.asarray(eye, dtype="f4").tobytes())
                     except Exception:  # noqa: BLE001 - program sin ese uniform (shader antiguo)
                         pass
-                for va in vaos.values():
-                    va.render(moderngl.TRIANGLES)
+                _draw(ctx, vaos, moderngl)
                 glfw.swap_buffers(win)
             glfw.poll_events()
             frames += 1

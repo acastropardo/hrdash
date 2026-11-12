@@ -46,7 +46,11 @@ format (`DECK_VATTR`: position, normal, track coords `(s, q)`, baked lamp warmth
 program (`DECK_VS` / `_deck_fs()`): planks, joints and the longitudinal painted lines are
 procedural in the fragment shader, filtered with `fwidth`. `_upload()` picks program and
 format per layer; if the deck program fails to compile it falls back to `to_mesh()` (plain
-wood, general program). Lighting is shared through the `SHADE` GLSL snippet. Plans and
+wood, general program). Lighting is shared through the `SHADE` GLSL snippet. Custom vertex
+formats live in `FORMATS` (`deck`, and `shadow`, drawn by `_draw()` with multiplicative
+blending); add a new one there rather than special-casing the render loop. Camera modes
+(`CAM_MODES`, key `v`) are child-process state: the TUI only sends a changing `cam_cmd`
+counter, like `zoom_cmd`. Plans and
 offscreen-render checks for this work are in `docs/plans/velodromo-render.md`.
 
 ## Other drawing modules
