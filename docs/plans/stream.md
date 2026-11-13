@@ -48,6 +48,16 @@ Cliente -> motor:
 - `space` pausa la carrera y la sesion; `x` reinicia la carrera (cuenta atras otra vez). Al terminar se guarda la marca en
   `races.json` (junto a `config.toml`) y `race.pb` dice si fue record personal. `PROTOCOL` no cambia (clave aditiva).
 
+## Scratch contra el pelotón de IA
+
+- Acciones `ui`: `kind:scratch`, `scratch:laps:+|-` (8/12/16/20 vueltas de 250 m) y `scratch:level:+|-|easy|even|hard`. La sesion
+  (`menu.session`) trae `scratch: {laps, level, seed}` y `lines` con el FTP de los rivales.
+- Al iniciar, `peloton.ScratchRace`: el jugador y 3 rivales de IA (FTP = tu FTP x factor del nivel, semilla fija) con el mismo modelo fisico,
+  rebufo (hasta 33 % de ahorro de aire a rueda, nulo a 10 m), reserva W' de 15 kJ, tacticas (rodar a rueda, ataques, esprint final)
+  y cambio de linea para pasar. Clave `race` del snapshot con `event: "scratch"`: `{state, paused, distance_m, t, lap, laps, pos, n,
+  countdown, riders: [{id, name, color, player, s, q, v, pos, draft, gap_m}], alerts: [{t, text}], results? (al terminar:
+  [{id, name, color, player, time_s, pos, gap_s}]), wheel_kmh}`. Misma pausa, `x` y etiquetas `Salida` / `Vuelta n/N` / `libre`.
+
 ## Verificacion
 
 El harness vive fuera de este repo (convencion de AGENTS.md); esta en `hrdash-godot/harness/
