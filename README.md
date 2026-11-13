@@ -96,6 +96,17 @@ Teclas dentro de la consola (`--ascii`):
 | `v` | en la ventana 3D de la pista: cambia la camara (persecucion, TV fija, grua) |
 | `i` | en la ventana 3D de la pista: muestra u oculta los tacometros (HUD de carreras) |
 
+### Motor para el cliente Godot y carreras (`--stream`)
+
+`hrdash --stream [--port 8765] [--simulate]` ejecuta solo el **motor** (sensores, sesion, FIT/CSV, plan y carreras) y publica un
+snapshot JSON por WebSocket (`ws://127.0.0.1:8765`, esquema en `proto.py`); el cliente es
+[hrdash-godot](https://github.com/acastropardo/hrdash-godot), que dibuja el menu, las vistas y las carreras. Las carreras viven en el
+motor (modelo puro, sin UI): `race.py` (fisica potencia -> velocidad con rebufo y persecucion contra fantasma), `peloton.py` (scratch,
+**puntos** y **eliminacion** contra 3 rivales de IA con W', tacticas y seis niveles de dificultad por tu FTP: muy suave a super fuerte),
+`racelog.py` (historial `races.json` y records) y `workouts.py` (`SessionSpec`: libre, plan, personalizada, persecucion, scratch).
+La carrera corre a 10 Hz con la potencia del rodillo y se muestrea a 1 Hz como cualquier sesion; las claves nuevas del snapshot
+(`race`, `menu.history`) son opcionales, asi que los clientes antiguos las ignoran. Detalle y reglas en `docs/plans/stream.md`.
+
 ### Ventana 3D (`3`)
 
 La TUI y el muestreo siguen intactos; el 3D es una **ventana OpenGL nativa aparte**
