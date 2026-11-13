@@ -413,7 +413,7 @@ class Engine:
             pts = sc.event == "points"
             elim = sc.event == "elimination"
             rule = (f"SPRINT CADA {peloton.SPRINT_EVERY} VUELTAS: 5-3-2-1 (META X2)" if pts
-                    else f"CADA {peloton.ELIM_EVERY} VUELTAS SALE EL ULTIMO EN CRUZAR; GANA EL QUE QUEDA" if elim
+                    else f"CADA {peloton.ELIM_EVERY} VUELTAS SALE EL ULTIMO EN LA LINEA" if elim
                     else "GANA EL PRIMERO EN CRUZAR LA META")
             return {**workouts.spec_to_dict(s), "summary": s.summary(),
                     "name": "Carrera por puntos" if pts else "Eliminacion" if elim else "Scratch contra el peloton",
