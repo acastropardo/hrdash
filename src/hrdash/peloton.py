@@ -29,9 +29,25 @@ from . import race
 from .race import DT, G, LAP_M, MAX_RACE_S, POWER_MAX, Physics
 
 LAPS_LADDER = (8, 12, 16, 20)            # 2, 3, 4 y 5 km
-LEVELS = ("easy", "even", "hard")        # más lentos / parejos / más rápidos
-LEVEL_NAMES = {"easy": "MAS LENTOS", "even": "PAREJOS", "hard": "MAS RAPIDOS"}
-LEVEL_RANGE = {"easy": (0.78, 0.92), "even": (0.92, 1.06), "hard": (1.04, 1.18)}   # factor sobre el FTP del jugador
+# Dificultad de los rivales: seis niveles, de muy suave a super fuerte. Cada uno es un rango de FTP (factor sobre el FTP del
+# jugador) 0,07 más bajo que el siguiente; el más alto es el que antes se llamaba "parejos" (0,92-1,06: con 240 W de FTP,
+# rivales de 220 a 254 W).
+LEVELS = ("vsoft", "soft", "mid", "midhard", "strong", "vstrong")
+LEVEL_NAMES = {"vsoft": "MUY SUAVE", "soft": "SUAVE", "mid": "MEDIA", "midhard": "MEDIA FUERTE", "strong": "FUERTE",
+               "vstrong": "SUPER FUERTE"}
+LEVEL_RANGE = {"vsoft": (0.57, 0.71), "soft": (0.64, 0.78), "mid": (0.71, 0.85), "midhard": (0.78, 0.92),
+               "strong": (0.85, 0.99), "vstrong": (0.92, 1.06)}
+DEFAULT_LEVEL = "vstrong"
+# niveles de versiones anteriores (config.toml y races.json guardados): easy = el actual "media fuerte" (mismo rango),
+# even = "super fuerte"; hard (1,04-1,18) ya no existe y pasa al más alto
+OLD_LEVELS = {"easy": "midhard", "even": "vstrong", "hard": "vstrong"}
+
+
+def norm_level(level) -> str | None:
+    """El id actual de un nivel (acepta los antiguos), o None si no es un nivel."""
+    if level in LEVELS:
+        return level
+    return OLD_LEVELS.get(level) if isinstance(level, str) else None
 EVENTS = ("scratch", "points")
 EVENT_NAMES = {"scratch": "SCRATCH", "points": "PUNTOS"}
 SPRINT_EVERY = 4                          # vueltas entre sprints intermedios (prueba de puntos)
@@ -66,7 +82,7 @@ def draft_gain(d_m: float, dq: float) -> float:
 @dataclass(frozen=True)
 class ScratchSpec:
     laps: int = 12
-    level: str = "even"
+    level: str = DEFAULT_LEVEL
     seed: int = 7
     event: str = "scratch"          # "scratch" | "points"
 
@@ -82,7 +98,8 @@ class ScratchSpec:
 
 
 def apply_act(spec: ScratchSpec, act) -> ScratchSpec | None:
-    """`scratch:laps:+|-` (8/12/16/20 vueltas), `scratch:level:+|-` o `scratch:level:easy|even|hard`. None si no es de
+    """`scratch:laps:+|-` (8/12/16/20 vueltas), `scratch:level:+|-` (con tope), `scratch:level:next` (da la vuelta: la
+    tecla D del cliente) o `scratch:level:<id>` (ver LEVELS). None si no es de
     scratch; `spec` si no cambia nada. Nunca devuelve un estado fuera de rango."""
     if not isinstance(act, str):
         return None
@@ -102,11 +119,14 @@ def apply_act(spec: ScratchSpec, act) -> ScratchSpec | None:
         i = min(len(LAPS_LADDER) - 1, max(0, i + (1 if p[2] == "+" else -1)))
         return replace(spec, laps=LAPS_LADDER[i])
     if p[1] == "level":
-        if p[2] in LEVELS:
-            return replace(spec, level=p[2])
-        if p[2] in ("+", "-"):
-            i = LEVELS.index(spec.level) if spec.level in LEVELS else 1
-            i = min(len(LEVELS) - 1, max(0, i + (1 if p[2] == "+" else -1)))
+        if norm_level(p[2]) is not None:
+            return replace(spec, level=norm_level(p[2]))
+        if p[2] in ("+", "-", "next"):
+            i = LEVELS.index(spec.level) if spec.level in LEVELS else len(LEVELS) - 1
+            if p[2] == "next":
+                i = (i + 1) % len(LEVELS)
+            else:
+                i = min(len(LEVELS) - 1, max(0, i + (1 if p[2] == "+" else -1)))
             return replace(spec, level=LEVELS[i])
     return None
 
@@ -118,7 +138,7 @@ def spec_to_dict(s: ScratchSpec) -> dict:
 def spec_from_dict(d) -> ScratchSpec:
     """Levanta ValueError si algo no es válido (nunca otra cosa)."""
     try:
-        s = ScratchSpec(d["laps"], d["level"], d["seed"], d.get("event", "scratch"))
+        s = ScratchSpec(d["laps"], norm_level(d["level"]) or str(d["level"]), d["seed"], d.get("event", "scratch"))
     except (KeyError, TypeError) as exc:
         raise ValueError(f"scratch mal formado: {exc}") from exc
     ints = (s.laps, s.seed)

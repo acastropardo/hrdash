@@ -44,7 +44,7 @@ def _key(r) -> tuple:
     """La categoria de un registro (los records se comparan solo dentro de ella)."""
     if r["event"] == "persecucion":
         return ("persecucion", r["distance_m"])
-    return (r["event"], r["laps"], r.get("level", "even"))
+    return (r["event"], r["laps"], _norm(r.get("level", "even")))
 
 
 def _score(r) -> float:
@@ -114,13 +114,17 @@ def record_from_peloton(r, now: float | None = None) -> dict | None:
 
 
 _NAMES = {"persecucion": "PERSECUCION", "scratch": "SCRATCH", "points": "PUNTOS"}
-_LEVELS = {"easy": "LENTOS", "even": "PAREJOS", "hard": "RAPIDOS"}
+def _norm(level) -> str:
+    """Los registros viejos guardan easy/even/hard: se leen con el nombre de hoy."""
+    from . import peloton
+    return peloton.norm_level(level) or str(level)
 
 
 def _label(k: tuple) -> str:
     if k[0] == "persecucion":
         return f"PERSECUCION {k[1] / 1000:g} KM"
-    return f"{_NAMES[k[0]]} {k[1]} V {_LEVELS.get(k[2], k[2])}"
+    from . import peloton
+    return f"{_NAMES[k[0]]} {k[1]} V {peloton.LEVEL_NAMES.get(k[2], str(k[2]).upper())}"
 
 
 def _value(r) -> str:
