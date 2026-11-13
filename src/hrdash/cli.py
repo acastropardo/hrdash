@@ -53,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
                             "consola; falla si el 3D no esta disponible")
     modes.add_argument("--ascii", action="store_true",
                        help="consola (TUI de Textual) en la terminal, sin ventana 3D")
+    modes.add_argument("--stream", action="store_true",
+                       help="sin ventana: sirve el mismo protocolo por WebSocket en 127.0.0.1 "
+                            "(--port) para un cliente grafico externo (Godot); necesita el extra "
+                            "[stream]")
+    p.add_argument("--port", type=int, default=8765, metavar="N",
+                   help="puerto de --stream (default 8765)")
     p.add_argument("--now", action="store_true",
                    help="modo 3D: salta el menu y empieza a rodar ya (scripts, pruebas)")
     p.add_argument("--simulate", action="store_true",
@@ -241,9 +247,10 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     eng.start()
     if menu:
         eng.request_scan(fresh=False)        # lista inicial (comparte el escaneo de las fuentes)
-    print(f"3D standalone · {'menu -> ' if menu else ''}vistas: {'+'.join(eng.views)} · FC={getattr(hr_source, 'name', '')}"
+    print(f"{getattr(host, 'label', '3D standalone')} · {'menu -> ' if menu else ''}vistas: {'+'.join(eng.views)} · FC={getattr(hr_source, 'name', '')}"
           + (f" · rodillo={getattr(tr_source, 'name', '')}" if tr_source else "")
-          + " · `q` en la ventana o Ctrl+C para salir y grabar · `v` camara · `i` tacometros")
+          + (" · `q` del cliente o Ctrl+C para salir y grabar" if getattr(host, "keeps_open", False)
+             else " · `q` en la ventana o Ctrl+C para salir y grabar · `v` camara · `i` tacometros"))
     warned = False
     quit_now = False
     opened = False        # primer mensaje `win` del hijo: la ventana existe
@@ -344,11 +351,21 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
         except Exception:  # noqa: BLE001 - no poder guardar la config no debe impedir exportar
             pass
         await eng.stop()
-        host.stop()
+        if not getattr(host, "keeps_open", False):
+            host.stop()                      # el stream sigue abierto hasta mandar el resumen
     if eng.phase == "menu":                  # salio del menu sin pulsar Play: no hay sesion
+        host.stop()
         print("Saliste del menu sin iniciar: no se grabo nada.")
         return 2 if never_opened else 0
-    res = eng.export()
+    try:
+        res = eng.export()
+    except BaseException:
+        host.stop()
+        raise
+    if getattr(host, "keeps_open", False):   # el cliente recibe el resumen antes de cerrar
+        from .stream import summary_dict
+        host.send_summary(summary_dict(eng, res))
+        host.stop()
     print_summary(eng.session, res)
     if eng.workout is not None:              # el plan elegido en el menu (la fase 4 lo sigue en vivo)
         print(f"  plan: {eng.spec.summary().capitalize()}")
@@ -444,6 +461,19 @@ def main(argv=None) -> int:
 
     if args.duration:
         return asyncio.run(cmd_headless(hr_source, tr_source, cfg, args.duration))
+
+    if args.stream:
+        # Sin ventana: el motor espera a un cliente grafico por WebSocket (Godot). Menu previo y
+        # el resto del flujo son los del 3D standalone; solo cambia el host.
+        if args.dual:
+            print("--dual es de la ventana OpenGL: no aplica a --stream.")
+            return 2
+        from .stream import StreamHost
+        return asyncio.run(cmd_3d(hr_source, tr_source, cfg, getattr(args, "3d_view") or ["gauge"],
+                                  host=StreamHost(port=args.port, views=SCENES_VIEWS),
+                                  menu=not args.now,
+                                  scanner=sim_scan if args.simulate else None,
+                                  factory=sim_factory if args.simulate else None))
 
     # Sin modo explicito arranca el 3D; si aqui no puede (sin paquetes GL o sin display),
     # cae a la consola en vez de fallar. Con --3d explicito no hay caida: falla y avisa.
