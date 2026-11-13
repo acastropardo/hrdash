@@ -381,9 +381,31 @@ class Engine:
         (nombre, duracion, lineas de descripcion) y su perfil de bloques para el grafico."""
         s = self.spec
         w = s.build()
+        if s.kind == "race":
+            return {**workouts.spec_to_dict(s), "summary": s.summary(), "name": "Persecucion individual",
+                    "total_s": 0, "lines": self.race_hint(), "profile": []}
         return {**workouts.spec_to_dict(s), "summary": s.summary(),
                 "name": w.name if w else "Libre sin limite", "total_s": w.total_s if w else 0,
                 "lines": workouts.describe(w), "profile": workouts.profile(w)}
+
+    def race_hint(self) -> list:
+        """Lineas del menu para la persecucion elegida: a que ritmo corre el fantasma o la marca que se bate."""
+        sp = self.spec.race
+        key = (sp.distance_m, sp.ghost, sp.target_s)
+        if getattr(self, "_hint_key", None) != key:
+            phys = race.Physics(mass=float(self.config.weight) + 8.0)
+            if sp.ghost == "pace":
+                p = race.pace_power(phys, sp.distance_m, sp.target_s)
+                lines = [f"FANTASMA: {int(round(p))} W DE MEDIA",
+                         f"{sp.distance_m / sp.target_s * 3.6:.1f} KM/H DE MEDIA",
+                         "SALIDA PARADA, CUENTA ATRAS DE 3 S"]
+            else:
+                prev = racelog.best(sp.distance_m)
+                lines = (["TU MEJOR MARCA: " + race.fmt_clock(prev["time_s"]), prev["date"]] if prev else
+                         ["SIN MARCA PREVIA EN ESTA DISTANCIA", "CORRERA EL FANTASMA DE RITMO"])
+                lines.append("SALIDA PARADA, CUENTA ATRAS DE 3 S")
+            self._hint_key, self._hint = key, lines
+        return list(self._hint)
 
     # ------------------------------------------------------------ plan en curso (fase 4)
     def _plan_pos(self):
