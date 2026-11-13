@@ -32,6 +32,9 @@ Cliente -> motor:
 - `{"key": "q|x|s|space"}`, `{"views": [...]}`, `{"zoom": ...}`.
 - `{"ui": {"act": "<id>"}}`: las acciones del menu (`Engine.handle_ui`: `play`, `scan`, `dev:<id>`,
   `page:sesion`, `kind:preset:noruego`, `min:set:30`, `cu:warm:+`...).
+  Modo de fuentes: `sim` pasa al simulador (escaneo y elecciones de demostracion) y `real` vuelve a los sensores
+  reales (suelta el simulador, recupera la ultima banda y rodillo guardados y refresca el escaneo). El menu lleva
+  `can_real: true` cuando el motor entiende `real`; `--simulate` solo decide en que modo arranca (`Engine(demo=...)`).
 
 ## Verificacion
 

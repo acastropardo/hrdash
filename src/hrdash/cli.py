@@ -11,7 +11,7 @@ import time
 
 from . import __version__
 from .ble import (SensorSource, SimSensor, TrainerSource, is_address, probe,
-                  scan_heart_rate_sensors, scan_trainers, sim_factory, sim_scan)
+                  scan_heart_rate_sensors, scan_trainers)
 from .config import Config, load_config, prompt_interactive, save_config
 from .engine import Engine, SCENES_VIEWS
 from .history import Session
@@ -215,7 +215,7 @@ def cmd_tui(hr_source, tr_source, cfg: Config) -> int:
 
 
 async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None = None,
-                 host=None, menu: bool = False, scanner=None, factory=None,
+                 host=None, menu: bool = False, scanner=None, factory=None, demo: bool = False,
                  dual: bool = False) -> int:
     """Modo 3D (por defecto o `--3d`): motor + ventana, sin TUI. No hay terminal al que
     reenviar teclas.
@@ -235,7 +235,7 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     """
     from .glview import GLHost
     host = host or GLHost(dual=dual)
-    eng = Engine(hr_source, tr_source, cfg, menu=menu, scanner=scanner, factory=factory)
+    eng = Engine(hr_source, tr_source, cfg, menu=menu, scanner=scanner, factory=factory, demo=demo)
     if not menu:                        # `--now`: sin menu, arranca con la sesion guardada
         eng.workout = eng.spec.build()
     eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
@@ -472,8 +472,7 @@ def main(argv=None) -> int:
         return asyncio.run(cmd_3d(hr_source, tr_source, cfg, getattr(args, "3d_view") or ["gauge"],
                                   host=StreamHost(port=args.port, views=SCENES_VIEWS),
                                   menu=not args.now,
-                                  scanner=sim_scan if args.simulate else None,
-                                  factory=sim_factory if args.simulate else None))
+                                  demo=args.simulate))
 
     # Sin modo explicito arranca el 3D; si aqui no puede (sin paquetes GL o sin display),
     # cae a la consola en vez de fallar. Con --3d explicito no hay caida: falla y avisa.
@@ -491,8 +490,7 @@ def main(argv=None) -> int:
         return asyncio.run(cmd_3d(hr_source, tr_source, cfg,
                                   getattr(args, "3d_view") or (["pista", "gauge"] if args.dual else ["gauge"]),
                                   menu=not args.now,
-                                  scanner=sim_scan if args.simulate else None,
-                                  factory=sim_factory if args.simulate else None,
+                                  demo=args.simulate,
                                   dual=args.dual))
 
     if not sys.stdout.isatty():

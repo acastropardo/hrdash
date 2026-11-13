@@ -44,7 +44,7 @@ class Engine:
     """
 
     def __init__(self, hr_source, tr_source, config: Config, menu: bool = False,
-                 scanner=None, factory=None):
+                 scanner=None, factory=None, demo: bool = False):
         self.hr = hr_source
         self.tr = tr_source
         self.config = config
@@ -56,8 +56,13 @@ class Engine:
         self.phase = "menu" if menu else "running"
         self._dist0 = 0                     # distancia del rodillo al empezar la sesion
         self._pause_dist = 0                # distancia del rodillo al pausar (para no contar la pausa)
-        self.scanner = scanner or _default_scanner
-        self.factory = factory or self._default_factory
+        # Dos modos de fuentes: sensores reales (BLE) y demo (simulador, `--simulate`). El menu puede pasar de uno
+        # a otro (acciones `sim` y `real`), asi que cada modo guarda su par (escaneo, fabrica). `scanner` y
+        # `factory` inyectables (pruebas) sustituyen al par REAL.
+        from .ble import sim_factory, sim_scan
+        self._real = [scanner or _default_scanner, factory or self._default_factory]
+        self._demo = [sim_scan, sim_factory]
+        self.demo = bool(demo)
         self.devices: list[dict] = []       # ultimo escaneo, ya recortado y ordenado
         self.scan: dict = {"state": "idle", "msg": "", "n": 0}
         self._scan_task = None
@@ -68,6 +73,14 @@ class Engine:
         self.workout = None                     # plan de la sesion en curso (None = libre sin limite)
 
     # ------------------------------------------------------------ fuentes
+    @property
+    def scanner(self):
+        return (self._demo if self.demo else self._real)[0]
+
+    @property
+    def factory(self):
+        return (self._demo if self.demo else self._real)[1]
+
     def _default_factory(self, slot: str, dev):
         """Fuente nueva para una eleccion del menu (`slot` = "hr" | "trainer" | "both")."""
         from .ble import SensorSource, SimSensor, TrainerSource
@@ -184,9 +197,30 @@ class Engine:
     async def assign_sim(self) -> bool:
         """El simulador (FC + rodillo) en las dos ranuras, para probar sin hardware."""
         if self.hr is self.tr and getattr(self.hr, "is_sim", False):
+            self.demo = True
             return False
+        self.demo = True          # a partir de aqui el escaneo y las elecciones del menu son de demostracion
         sim = self.factory("both", None)
         await self._set_slots(hr=sim, tr=sim, keep_hr=False, keep_tr=False)
+        return True
+
+    async def assign_real(self) -> bool:
+        """Sale del simulador y vuelve a los sensores reales: suelta el simulador, recupera la ultima banda
+        (y rodillo) guardados en la configuracion y lanza un escaneo para refrescar la lista. Si ya no hay
+        simulador solo refresca el escaneo."""
+        was_sim = self.demo or getattr(self.hr, "is_sim", False) or getattr(self.tr, "is_sim", False)
+        self.demo = False
+        if not was_sim:
+            return self.request_scan(fresh=True)
+        hr = tr = None
+        cfg = self.config
+        if cfg.last_device:
+            hr = self.factory("hr", {"address": cfg.last_device, "name": cfg.last_device})
+        if cfg.last_trainer and cfg.use_trainer is not False:
+            tr = self.factory("trainer", {"address": cfg.last_trainer, "name": cfg.last_trainer})
+            self.trainer_pref = True
+        await self._set_slots(hr=hr, tr=tr, keep_hr=False, keep_tr=False)
+        self.request_scan(fresh=True)
         return True
 
     async def remove_trainer(self) -> bool:
@@ -250,6 +284,8 @@ class Engine:
             return self.request_scan(fresh=True)
         if act == "sim":
             return await self.assign_sim()
+        if act == "real":
+            return await self.assign_real()
         if act == "notrainer":
             return await self.remove_trainer()
         if act.startswith("dev:"):
@@ -285,6 +321,7 @@ class Engine:
                             for d in self.devices],
                 "scan": dict(self.scan),
                 "sim": self.hr is self.tr and bool(getattr(self.hr, "is_sim", False)),
+                "can_real": True,       # este motor sabe volver a los sensores reales (accion `real`)
                 "can_play": ok, "hint": why, "page": self.page, "session": self.session_info()}
 
     def session_info(self) -> dict:
