@@ -1,5 +1,7 @@
 """Historial de carreras (`races.json` junto a `config.toml`): tiempo, parciales y la serie de potencia de cada
-persecucion, para el fantasma "mi mejor marca" y para saber si una carrera es record personal.
+persecucion, para el fantasma "mi mejor marca" y para saber si una carrera es record personal. Tambien guarda el
+resultado de cada scratch y prueba de puntos (puesto, tiempo, puntos, potencia media) y resume todo para el menu
+(`summary`): records por prueba, tendencia y ultimas carreras.
 
 Escritura atomica (archivo temporal + rename) y lectura tolerante: un archivo roto o con campos raros no impide
 arrancar ni correr (se ignora y se vuelve a empezar)."""
@@ -20,13 +22,37 @@ def _path(path=None) -> Path:
     return CONFIG_DIR / "races.json"
 
 
+PELOTON_EVENTS = ("scratch", "points")
+
+
 def _valid(r) -> bool:
     try:
-        return (isinstance(r, dict) and r.get("event") == "persecucion" and isinstance(r.get("distance_m"), int)
+        if not isinstance(r, dict) or not isinstance(r.get("date"), str):
+            return False
+        if r.get("event") in PELOTON_EVENTS:
+            return (isinstance(r.get("laps"), int) and isinstance(r.get("pos"), int) and 1 <= r["pos"] <= 99
+                    and float(r["time_s"]) > 0 and isinstance(r.get("level", "even"), str)
+                    and isinstance(r.get("pts", 0), int) and isinstance(r.get("n", 4), int))
+        return (r.get("event") == "persecucion" and isinstance(r.get("distance_m"), int)
                 and float(r["time_s"]) > 0 and isinstance(r.get("power"), list)
                 and all(isinstance(x, (int, float)) and x == x for x in r["power"]))
     except (KeyError, TypeError, ValueError):
         return False
+
+
+def _key(r) -> tuple:
+    """La categoria de un registro (los records se comparan solo dentro de ella)."""
+    if r["event"] == "persecucion":
+        return ("persecucion", r["distance_m"])
+    return (r["event"], r["laps"], r.get("level", "even"))
+
+
+def _score(r) -> float:
+    """Menor es mejor: el tiempo en la persecucion y el scratch; en puntos, mas puntos y a igualdad menos tiempo."""
+    lost = 0.0 if r["event"] == "persecucion" or r.get("pos") == 1 else 1e5      # una derrota no es marca
+    if r["event"] == "points":
+        return lost - 1000.0 * r.get("pts", 0) + r["time_s"] / 1000.0
+    return lost + r["time_s"]
 
 
 def load(path=None) -> list:
@@ -48,8 +74,10 @@ def add(record: dict, path=None) -> bool:
     if not _valid(record):
         return False
     rs = load(path)
-    prev = [r["time_s"] for r in rs if r["distance_m"] == record["distance_m"]]
-    pb = not prev or record["time_s"] < min(prev)
+    prev = [_score(r) for r in rs if _key(r) == _key(record)]
+    pb = not prev or _score(record) < min(prev)
+    if record["event"] in PELOTON_EVENTS:
+        pb = pb and record["pos"] == 1          # en el pelotón solo cuenta como record una victoria
     rs.append(record)
     p = _path(path)
     try:
@@ -67,3 +95,63 @@ def record_from_race(r, now: float | None = None) -> dict:
     return {"event": "persecucion", "date": time.strftime("%Y-%m-%d %H:%M", time.localtime(now or time.time())),
             "distance_m": int(r.spec.distance_m), "time_s": round(float(r.final_s), 2),
             "splits": [round(x, 2) for x in r.splits], "power": [round(x, 1) for x in r.power_series]}
+
+
+def record_from_peloton(r, now: float | None = None) -> dict | None:
+    """El registro de un scratch / prueba de puntos terminado (`ScratchRace` en `finished`), o None si el jugador no
+    tiene resultado."""
+    me = next((x for x in getattr(r, "results", []) if x.get("player")), None)
+    if me is None or me.get("time_s") is None:
+        return None
+    ps = [x for x in r.power_series if x == x]
+    rec = {"event": r.spec.event, "date": time.strftime("%Y-%m-%d %H:%M", time.localtime(now or time.time())),
+           "laps": int(r.spec.laps), "level": r.spec.level, "pos": int(me["pos"]), "n": len(r.results),
+           "time_s": round(float(me["time_s"]), 2), "avg_w": round(sum(ps) / len(ps), 1) if ps else 0.0,
+           "max_w": round(max(ps), 1) if ps else 0.0}
+    if r.spec.event == "points":
+        rec["pts"] = int(me.get("pts", 0))
+    return rec
+
+
+_NAMES = {"persecucion": "PERSECUCION", "scratch": "SCRATCH", "points": "PUNTOS"}
+_LEVELS = {"easy": "LENTOS", "even": "PAREJOS", "hard": "RAPIDOS"}
+
+
+def _label(k: tuple) -> str:
+    if k[0] == "persecucion":
+        return f"PERSECUCION {k[1] / 1000:g} KM"
+    return f"{_NAMES[k[0]]} {k[1]} V {_LEVELS.get(k[2], k[2])}"
+
+
+def _value(r) -> str:
+    m, sec = divmod(r["time_s"], 60.0)
+    clock = f"{int(m)}:{sec:04.1f}"
+    return f"{r.get('pts', 0)} PTS" if r["event"] == "points" else clock
+
+
+def summary(path=None, recent: int = 8, records: int = 8, trend: int = 8) -> dict:
+    """Lo que dibuja la pagina HISTORIAL del menu: totales, records por prueba (con la tendencia de sus ultimas marcas,
+    de la mas antigua a la mas reciente, ya como tiempo o puntos) y las ultimas carreras. Siempre un dict valido."""
+    rs = load(path)
+    cats: dict = {}
+    for r in rs:
+        cats.setdefault(_key(r), []).append(r)
+    recs = []
+    for k, lst in cats.items():
+        best = min(lst, key=_score)
+        recs.append({"label": _label(k), "value": _value(best), "date": best["date"][:10], "n": len(lst),
+                     "last": lst[-1]["date"], "trend": [r["pts"] if r["event"] == "points" else r["time_s"]
+                                                        for r in lst[-trend:]],
+                     "lower_better": best["event"] != "points"})
+    recs.sort(key=lambda d: d["last"], reverse=True)
+    for d in recs:
+        d.pop("last")
+    last = []
+    for r in reversed(rs[-recent:]):
+        won = r["event"] == "persecucion" or r.get("pos") == 1
+        pos = "" if r["event"] == "persecucion" else f"P{r['pos']}/{r.get('n', 4)}"
+        last.append({"date": r["date"], "label": _label(_key(r)), "value": _value(r), "pos": pos,
+                     "won": bool(won and r["event"] != "persecucion")})
+    km = sum((r["distance_m"] if r["event"] == "persecucion" else r["laps"] * 250) for r in rs) / 1000.0
+    return {"n": len(rs), "wins": sum(1 for r in rs if r["event"] != "persecucion" and r.get("pos") == 1),
+            "km": round(km, 1), "records": recs[:records], "recent": last}

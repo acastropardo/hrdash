@@ -299,8 +299,12 @@ class Engine:
         was = r.state
         w = getattr(self.tr, "watts", None) if self.tr else None
         r.step(dt, float(w) if w is not None else 0.0)
-        if was != "finished" and r.state == "finished" and getattr(r, "final_s", None) is not None:
-            self.race_pb = racelog.add(racelog.record_from_race(r))
+        if was != "finished" and r.state == "finished":
+            if getattr(r, "final_s", None) is not None:
+                self.race_pb = racelog.add(racelog.record_from_race(r))
+            elif isinstance(r, peloton.ScratchRace):
+                rec = racelog.record_from_peloton(r)
+                self.race_pb = racelog.add(rec) if rec is not None else False
 
     def race_info(self) -> dict | None:
         """Clave `race` del snapshot: el estado de la carrera mas lo que el cliente necesita aparte."""
@@ -312,7 +316,7 @@ class Engine:
         d["wheel_kmh"] = None if wheel is None else round(float(wheel), 1)     # la velocidad real de la rueda, como dato
         if self.race_note:
             d["note"] = self.race_note
-        if r.state == "finished" and d.get("event") == "persecucion":
+        if r.state == "finished" and d.get("event") in ("persecucion", "scratch"):
             d["pb"] = bool(self.race_pb)
         return d
 
@@ -380,7 +384,19 @@ class Engine:
                 "scan": dict(self.scan),
                 "sim": self.hr is self.tr and bool(getattr(self.hr, "is_sim", False)),
                 "can_real": True,       # este motor sabe volver a los sensores reales (accion `real`)
-                "can_play": ok, "hint": why, "page": self.page, "session": self.session_info()}
+                "can_play": ok, "hint": why, "page": self.page, "session": self.session_info(),
+                "history": self.history_info()}
+
+    def history_info(self) -> dict:
+        """Resumen del historial de carreras para la pagina HISTORIAL; se relee solo si el archivo cambio."""
+        try:
+            from .config import CONFIG_DIR
+            mt = (CONFIG_DIR / "races.json").stat().st_mtime
+        except OSError:
+            mt = 0.0
+        if getattr(self, "_hist_cache", None) is None or self._hist_cache[0] != mt:
+            self._hist_cache = (mt, racelog.summary())
+        return self._hist_cache[1]
 
     def session_info(self) -> dict:
         """La sesion elegida tal como la dibuja el menu: la especificacion, el plan que resulta

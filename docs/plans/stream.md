@@ -86,3 +86,13 @@ En puntos hay un sprint intermedio cada 4 vueltas (5/3/2/1 puntos por orden de c
 mas (empate: quien cruza antes la meta). Atacantes y velocistas disputan los sprints con W'. El snapshot `race` conserva
 `event: "scratch"` (el cliente dibuja igual) y anade `mode: "points"`, `pts` por corredor, `sprint_next` (vuelta completada del
 proximo sprint), `sprint_to_m`, `sprint_x2` y en `results` `pts`/`sprint_pts`. Aditivo: PROTOCOL sin cambios.
+
+
+## Historial de carreras (menu HISTORIAL)
+
+`racelog` guarda tambien cada scratch / prueba de puntos terminado (`record_from_peloton`: puesto, tiempo, puntos, potencia
+media y maxima, sin la serie por segundo) junto a las persecuciones, en el mismo `races.json`. Un registro de pelotón solo
+es record si se gana (`pos == 1`) y mejora el tiempo (scratch) o los puntos (puntos) de su categoria (prueba, vueltas, nivel).
+`summary()` devuelve `{n, wins, km, records:[{label, value, date, n, trend, lower_better}], recent:[{date, label, value, pos,
+won}]}`, que el menu lleva en la clave nueva `history` de `menu` (se relee solo si cambia el archivo). `race.pb` pasa a
+valer tambien en el scratch.
