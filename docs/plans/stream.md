@@ -77,3 +77,12 @@ test_stream.py` y lanza `hrdash --simulate --stream` contra un cliente WebSocket
 - `websockets` en un hilo propio dentro de `cmd_3d`: el cierre (`q`) deja el export en el hilo
   principal y el host abierto hasta `send_summary`, con un tope de 2 s si el cliente no lee.
 - El protocolo es el punto de ruptura entre repos: cambios solo aditivos y version en el `hello`.
+
+
+## Prueba de puntos (sobre el pelotón del scratch)
+
+`ScratchSpec.event` ("scratch" | "points"; acto `scratch:event:+|-|scratch|points`; configs antiguas sin la clave = scratch).
+En puntos hay un sprint intermedio cada 4 vueltas (5/3/2/1 puntos por orden de cruce) y la meta vale el doble; gana quien suma
+mas (empate: quien cruza antes la meta). Atacantes y velocistas disputan los sprints con W'. El snapshot `race` conserva
+`event: "scratch"` (el cliente dibuja igual) y anade `mode: "points"`, `pts` por corredor, `sprint_next` (vuelta completada del
+proximo sprint), `sprint_to_m`, `sprint_x2` y en `results` `pts`/`sprint_pts`. Aditivo: PROTOCOL sin cambios.

@@ -12,6 +12,10 @@ rebufo, y los rivales deciden su potencia con una táctica simple basada en un F
 - Pasar a otro corredor cambia de línea hacia fuera (q mayor) para no atravesarlo.
 Todo con semilla fija: la misma carrera sale igual (comprobable y repetible).
 
+Prueba de PUNTOS (`ScratchSpec.event == "points"`): mismo pelotón y misma física, pero cada `SPRINT_EVERY` vueltas hay un
+sprint intermedio (5/3/2/1 puntos a los cuatro primeros en cruzar la línea) y el sprint de la meta vale el doble; gana quien
+suma más puntos (empate: el que cruzó antes la meta). Atacantes y velocistas disputan los sprints intermedios con W'.
+
 La clasificación sale de los cruces de meta interpolados; cuando el jugador cruza, el resto del pelotón se simula
 hacia delante de golpe para dar la clasificación final.
 """
@@ -28,6 +32,10 @@ LAPS_LADDER = (8, 12, 16, 20)            # 2, 3, 4 y 5 km
 LEVELS = ("easy", "even", "hard")        # más lentos / parejos / más rápidos
 LEVEL_NAMES = {"easy": "MAS LENTOS", "even": "PAREJOS", "hard": "MAS RAPIDOS"}
 LEVEL_RANGE = {"easy": (0.78, 0.92), "even": (0.92, 1.06), "hard": (1.04, 1.18)}   # factor sobre el FTP del jugador
+EVENTS = ("scratch", "points")
+EVENT_NAMES = {"scratch": "SCRATCH", "points": "PUNTOS"}
+SPRINT_EVERY = 4                          # vueltas entre sprints intermedios (prueba de puntos)
+SPRINT_POINTS = (5, 3, 2, 1)              # puntos de un sprint intermedio por orden de cruce (la meta, el doble)
 N_RIVALS = 3
 COLORS = ("#ef4444", "#3b82f6", "#eab308")      # rival 1, 2 y 3 (el jugador lleva el de su zona)
 NAMES = ("ROJO", "AZUL", "AMARILLO")
@@ -60,12 +68,17 @@ class ScratchSpec:
     laps: int = 12
     level: str = "even"
     seed: int = 7
+    event: str = "scratch"          # "scratch" | "points"
 
     def distance_m(self) -> int:
         return int(self.laps * LAP_M)
 
     def summary(self) -> str:
-        return f"SCRATCH {self.laps} VUELTAS - {LEVEL_NAMES[self.level]}"
+        return f"{EVENT_NAMES[self.event]} {self.laps} VUELTAS - {LEVEL_NAMES[self.level]}"
+
+    def sprint_laps(self) -> list:
+        """Vueltas completadas en cada sprint intermedio (la meta cuenta aparte, con puntos dobles)."""
+        return list(range(SPRINT_EVERY, self.laps, SPRINT_EVERY)) if self.event == "points" else []
 
 
 def apply_act(spec: ScratchSpec, act) -> ScratchSpec | None:
@@ -75,6 +88,14 @@ def apply_act(spec: ScratchSpec, act) -> ScratchSpec | None:
         return None
     p = act.split(":")
     if p[0] != "scratch" or len(p) != 3:
+        return None
+    if p[1] == "event":
+        if p[2] in EVENTS:
+            return replace(spec, event=p[2])
+        if p[2] in ("+", "-"):
+            i = EVENTS.index(spec.event) if spec.event in EVENTS else 0
+            i = min(len(EVENTS) - 1, max(0, i + (1 if p[2] == "+" else -1)))
+            return replace(spec, event=EVENTS[i])
         return None
     if p[1] == "laps" and p[2] in ("+", "-"):
         i = LAPS_LADDER.index(spec.laps) if spec.laps in LAPS_LADDER else 1
@@ -91,17 +112,17 @@ def apply_act(spec: ScratchSpec, act) -> ScratchSpec | None:
 
 
 def spec_to_dict(s: ScratchSpec) -> dict:
-    return {"laps": s.laps, "level": s.level, "seed": s.seed}
+    return {"laps": s.laps, "level": s.level, "seed": s.seed, "event": s.event}
 
 
 def spec_from_dict(d) -> ScratchSpec:
     """Levanta ValueError si algo no es válido (nunca otra cosa)."""
     try:
-        s = ScratchSpec(d["laps"], d["level"], d["seed"])
+        s = ScratchSpec(d["laps"], d["level"], d["seed"], d.get("event", "scratch"))
     except (KeyError, TypeError) as exc:
         raise ValueError(f"scratch mal formado: {exc}") from exc
     ints = (s.laps, s.seed)
-    if s.laps not in LAPS_LADDER or s.level not in LEVELS or not all(isinstance(v, int) and not isinstance(v, bool) for v in ints):
+    if s.laps not in LAPS_LADDER or s.level not in LEVELS or s.event not in EVENTS or not all(isinstance(v, int) and not isinstance(v, bool) for v in ints):
         raise ValueError("scratch fuera de rango")
     return s
 
@@ -118,6 +139,8 @@ class Rider:
         self.power = 0.0
         self.draft = 0.0
         self.finish_t: float | None = None
+        self.pts = 0                   # puntos (prueba de puntos)
+        self.sprint_pts: list = []     # puntos ganados en cada sprint, en orden (0 si no puntuo)
         # IA
         self.cp = 250.0
         self.w0 = W_PRIME
@@ -131,6 +154,7 @@ class Rider:
         self.qv = 0.0                  # velocidad lateral (m/s)
         self.tq = START_Q[idx]         # linea a la que va (con compromiso: no cambia de idea cada 0,1 s)
         self.hold_until = 0.0
+        self.sprinted: set = set()     # sprints intermedios ya disputados (la IA no repite)
 
 
 def make_field(spec: ScratchSpec, ftp: float, mass: float) -> list:
@@ -171,6 +195,9 @@ class ScratchRace:
         self.results: list = []         # clasificación final [{id, name, color, time_s, pos, gap_s}]
         self.alerts: list = []          # [{t, text}] eventos para el cliente ("ATAQUE ROJO", "ULTIMA VUELTA"...)
         self._flags: set = set()
+        self.points = spec.event == "points"
+        self.sprints = [int(n * lap_m) for n in spec.sprint_laps()]    # distancia de cada sprint intermedio
+        self._sprint_cross: dict = {}      # nº de sprint -> ids ya cruzados, en orden
         self.power_series: list = []
         self._sec_acc = self._sec_t = 0.0
 
@@ -223,6 +250,10 @@ class ScratchRace:
         if left_laps <= r.sprint_laps:
             t_left = max(2.0, (self.dist - r.s) / max(r.v, 6.0))
             return min(2.3 * cp, cp + r.w / t_left) if r.w > 0.02 * r.w0 else 1.02 * cp
+        if self.points and r.role != "rouleur":
+            for k, sd in enumerate(self.sprints):
+                if 0.0 < sd - r.s < 0.7 * self.lap_m and k not in r.sprinted and r.w > 0.35 * r.w0:
+                    return min(1.9 * cp, cp + r.w / 6.0) if r.role == "sprinter" else 1.35 * cp
         lead = self._ahead(r)
         if lead is None:
             return r.lead_frac * cp                       # nadie delante: lleva el ritmo
@@ -272,6 +303,25 @@ class ScratchRace:
         if abs(err) < 0.01 and abs(r.qv) < 0.05:
             r.q, r.qv = (r.tq, 0.0)
 
+    def _sprint_check(self, r: Rider, s0: float, s1: float, dt: float) -> None:
+        """Reparte los puntos del sprint intermedio al cruzar su línea (orden de cruce) y los de la meta (doble)."""
+        for k, sd in enumerate(self.sprints):
+            if s0 < sd <= s1 and r.idx not in self._sprint_cross.setdefault(k, []):
+                order = self._sprint_cross[k]
+                order.append(r.idx)
+                pts = SPRINT_POINTS[len(order) - 1] if len(order) <= len(SPRINT_POINTS) else 0
+                r.pts += pts
+                r.sprint_pts.append(pts)
+                r.sprinted.add(k)
+                if pts:
+                    self._alert(f"SPRINT {k + 1}: {r.name} +{pts}" if not r.is_player else f"SPRINT {k + 1}: +{pts} PUNTOS")
+        order = self._sprint_cross.setdefault(-1, [])
+        if r.idx not in order and s0 < self.dist <= s1 + 1e-9:
+            order.append(r.idx)
+            pts = 2 * SPRINT_POINTS[len(order) - 1] if len(order) <= len(SPRINT_POINTS) else 0
+            r.pts += pts
+            r.sprint_pts.append(pts)
+
     def _alert(self, text: str) -> None:
         self.alerts.append({"t": round(self.t, 1), "text": text})
         del self.alerts[:-6]
@@ -292,6 +342,8 @@ class ScratchRace:
                 r.finish_t = self.t + dt * (self.dist - r.s) / max(1e-9, s1 - r.s)
                 self.order.append(r.idx)
                 self._alert(f"META {r.name}" if not r.is_player else "META")
+            if self.points:
+                self._sprint_check(r, r.s, s1, dt)
             r.v, r.s = v1, s1
             if not r.is_player:
                 self._update_w(r, dt)
@@ -328,16 +380,19 @@ class ScratchRace:
         while any(r.finish_t is None for r in self.riders) and self.t < MAX_RACE_S and guard < 20000:
             self._advance(DT, 0.0)
             guard += 1
-        ranked = sorted(self.riders, key=lambda r: (r.finish_t if r.finish_t is not None else 1e9, -r.s))
+        ranked = sorted(self.riders, key=lambda r: ((-r.pts if self.points else 0), (r.finish_t if r.finish_t is not None else 1e9), -r.s))
         win = ranked[0].finish_t or 0.0
         self.results = [{"id": r.idx, "name": r.name, "color": r.color, "player": r.is_player,
                          "time_s": None if r.finish_t is None else round(r.finish_t, 2), "pos": i + 1,
-                         "gap_s": None if r.finish_t is None else round(r.finish_t - win, 2)}
+                         "gap_s": None if r.finish_t is None else round(r.finish_t - win, 2),
+                         **({"pts": r.pts, "sprint_pts": list(r.sprint_pts)} if self.points else {})}
                         for i, r in enumerate(ranked)]
 
     # -- clasificación en vivo
     def standings(self) -> list:
         """Orden actual: los que ya cruzaron por tiempo de llegada y el resto por distancia recorrida."""
+        if self.points:       # puntos: manda la suma de puntos; a igualdad, quien cruzó antes la meta y luego quien va delante
+            return sorted(self.riders, key=lambda r: (-r.pts, r.finish_t if r.finish_t is not None else 1e9, -r.s))
         done = sorted([r for r in self.riders if r.finish_t is not None], key=lambda r: r.finish_t)
         rest = sorted([r for r in self.riders if r.finish_t is None], key=lambda r: -r.s)
         return done + rest
@@ -351,14 +406,20 @@ class ScratchRace:
     def to_dict(self) -> dict:
         st = self.standings()
         pos = {r.idx: i + 1 for i, r in enumerate(st)}
-        lead = st[0]
-        d = {"event": "scratch", "state": self.state, "paused": self.paused, "distance_m": int(self.dist),
+        lead = max(self.riders, key=lambda r: r.s)
+        d = {"event": "scratch", "mode": self.spec.event, "state": self.state, "paused": self.paused, "distance_m": int(self.dist),
              "t": round(self.t, 2), "lap": self.lap(), "laps": self.laps, "pos": pos[0], "n": len(self.riders),
              "countdown": round(max(0.0, self.countdown), 1) if self.state == "countdown" else 0.0,
              "riders": [{"id": r.idx, "name": r.name, "color": r.color, "player": r.is_player, "s": round(r.s, 1),
                          "q": round(r.q, 2), "v": round(r.v * 3.6, 1), "pos": pos[r.idx], "draft": round(r.draft, 2),
-                         "gap_m": round(lead.s - r.s, 1) if r.finish_t is None else 0.0} for r in self.riders],
+                         "gap_m": round(lead.s - r.s, 1) if r.finish_t is None else 0.0,
+                         **({"pts": r.pts} if self.points else {})} for r in self.riders],
              "alerts": [a for a in self.alerts if self.t - a["t"] < 6.0]}
+        if self.points:
+            ahead = [sd for sd in self.sprints if sd > self.player.s]
+            d["sprint_next"] = int(ahead[0] // self.lap_m) if ahead else self.laps      # vuelta completada del próximo sprint
+            d["sprint_to_m"] = round((ahead[0] if ahead else self.dist) - self.player.s, 0)
+            d["sprint_x2"] = not ahead                                                    # el que queda es el de la meta (doble)
         if self.state == "finished":
             d["results"] = self.results
         return d
