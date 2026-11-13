@@ -33,6 +33,8 @@ class Physics:
     crr: float = 0.003
     mass: float = 83.0        # kg, ciclista + bici
     rho: float = 1.2          # kg/m3
+    a_max: float = 0.0        # m/s2: tope de aceleracion (0 = sin tope). A potencia constante la aceleracion a v ~ 0 es enorme
+                              # (P / (m v)); un ciclista real no pasa de ~3 m/s2 en la salida, y asi no hay saltos de velocidad
 
     def resist(self, v: float, draft: float = 0.0) -> float:
         """Potencia que consume avanzar a `v` m/s (aire + rodadura). `draft` (0..0,6) es la fraccion de
@@ -49,7 +51,10 @@ class Physics:
         v1 = math.sqrt(max(0.0, 2.0 * (e + (p - self.resist(v, draft)) * dt) / self.mass))
         vm = 0.5 * (v + v1)
         e1 = e + (p - self.resist(vm, draft)) * dt
-        return min(MAX_SPEED, math.sqrt(max(0.0, 2.0 * e1 / self.mass)))
+        v2 = min(MAX_SPEED, math.sqrt(max(0.0, 2.0 * e1 / self.mass)))
+        if self.a_max > 0.0 and v2 > v + self.a_max * dt:
+            v2 = v + self.a_max * dt
+        return v2
 
     def steady_speed(self, power_w: float) -> float:
         """Velocidad estable (m/s) a potencia constante, por biseccion."""

@@ -38,6 +38,8 @@ DRAFT_FULL_M = 1.2                        # ahorro completo hasta aqui...
 DRAFT_END_M = 10.0                        # ...y nulo a partir de aqui
 LANE_GAP = 1.0                            # separación lateral (m) para pasar a otro
 LANE_RATE = 0.9                           # m/s de cambio de línea
+LANE_HOLD_S = 3.0                         # una vez fuera, se mantiene la línea al menos esto (sin vaivén)
+A_MAX = 3.0                               # m/s2 de aceleración máxima (salida y esprints)
 Q_MAX = 3.0
 START_Q = (0.0, 0.8, 1.6, 2.4)            # parrilla: jugador y rivales en abanico
 
@@ -126,17 +128,20 @@ class Rider:
         self.attack_until = -1.0
         self.sprint_laps = 1.0         # vueltas que faltan cuando empieza a esprintar
         self.attacked = False
+        self.qv = 0.0                  # velocidad lateral (m/s)
+        self.tq = START_Q[idx]         # linea a la que va (con compromiso: no cambia de idea cada 0,1 s)
+        self.hold_until = 0.0
 
 
 def make_field(spec: ScratchSpec, ftp: float, mass: float) -> list:
     """Jugador (idx 0) y N_RIVALS rivales con FTP = ftp x factor del nivel, masa y papel con la semilla fija."""
     rng = random.Random(spec.seed)
-    riders = [Rider(0, "TU", "#22c55e", Physics(mass=mass), True)]
+    riders = [Rider(0, "TU", "#22c55e", Physics(mass=mass, a_max=A_MAX), True)]
     lo, hi = LEVEL_RANGE[spec.level]
     roles = list(ROLES)
     rng.shuffle(roles)
     for i in range(N_RIVALS):
-        r = Rider(i + 1, NAMES[i], COLORS[i], Physics(cda=0.28 * rng.uniform(0.95, 1.05), mass=mass * rng.uniform(0.92, 1.08)))
+        r = Rider(i + 1, NAMES[i], COLORS[i], Physics(cda=0.28 * rng.uniform(0.95, 1.05), mass=mass * rng.uniform(0.92, 1.08), a_max=A_MAX))
         r.cp = max(60.0, ftp * rng.uniform(lo, hi))
         r.w0 = r.w = W_PRIME * rng.uniform(0.85, 1.15)
         r.role = roles[i % len(roles)]
@@ -235,20 +240,37 @@ class ScratchRace:
             r.w = min(r.w0, r.w + (r.cp - r.power) * dt * 0.6)
 
     def _lanes(self, r: Rider, dt: float) -> None:
-        """Pasar a otro corredor cambiando de línea: hacia fuera si hay sitio (q mayor) y si no hacia dentro; sin
-        nadie cerca vuelve a la línea de abajo. Con todo ocupado se queda donde está (y a rueda no se atraviesan)."""
-        tq = START_Q[0]
+        """Pasar a otro corredor cambiando de línea, con compromiso: solo adelanta quien se acerca a alguien que va
+        delante (o va a solaparle), elige el lado con sitio (fuera si cabe, si no dentro) y mantiene esa línea al menos
+        LANE_HOLD_S antes de volver a la de abajo. Sin ese compromiso el corredor entraba y salía de la línea cada 0,1 s.
+        Quien va a rueda de otro NO se mueve (el rebufo exige estar en su línea). El cambio de línea es suave (aceleración
+        lateral acotada), no un salto."""
+        blocker = None
         for o in self.riders:
-            if o is r or not (-1.5 < o.s - r.s < 6.0):
+            ds = o.s - r.s
+            if o is r or abs(o.q - r.q) >= LANE_GAP or not (-0.6 < ds < 6.0):
                 continue
-            if abs(o.q - r.q) < LANE_GAP:
-                opts = [q for q in (o.q + LANE_GAP + 0.1, o.q - LANE_GAP - 0.1) if 0.0 <= q <= Q_MAX]
-                if opts:
-                    tq = max(tq, min(opts, key=lambda q: abs(q - r.q))) if tq > START_Q[0] else min(opts, key=lambda q: abs(q - r.q))
-                else:
-                    tq = r.q
-        step = LANE_RATE * dt
-        r.q += max(-step, min(step, tq - r.q))
+            closing = r.v > o.v + 0.15 or ds < 0.5
+            tie = abs(ds) <= 0.6 and r.idx > o.idx              # lado a lado: se aparta el de mayor dorsal
+            if (ds > 0.0 and closing) or tie:
+                if blocker is None or ds < blocker.s - r.s:
+                    blocker = o
+        if blocker is not None and self.t >= r.hold_until - LANE_HOLD_S + 0.5:
+            opts = [q for q in (blocker.q + LANE_GAP + 0.1, blocker.q - LANE_GAP - 0.1) if 0.0 <= q <= Q_MAX]
+            if opts:
+                r.tq = min(opts, key=lambda q: abs(q - r.q))
+                r.hold_until = self.t + LANE_HOLD_S
+        elif self.t >= r.hold_until and r.tq != START_Q[0]:
+            # de vuelta a la línea de abajo, pero solo si esta libre (nadie entre 3 m detras y 6 m delante en esa línea)
+            if all(not (-3.0 < o.s - r.s < 6.0 and abs(o.q - START_Q[0]) < LANE_GAP) for o in self.riders if o is not r):
+                r.tq = START_Q[0]
+        # movimiento suave: la velocidad lateral sube y baja con rampa (no un escalón de 0,9 m/s)
+        err = r.tq - r.q
+        want = max(-LANE_RATE, min(LANE_RATE, err * 1.6))
+        r.qv += max(-1.5 * dt, min(1.5 * dt, want - r.qv))
+        r.q = max(0.0, min(Q_MAX, r.q + r.qv * dt))
+        if abs(err) < 0.01 and abs(r.qv) < 0.05:
+            r.q, r.qv = (r.tq, 0.0)
 
     def _alert(self, text: str) -> None:
         self.alerts.append({"t": round(self.t, 1), "text": text})
