@@ -238,6 +238,8 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     eng = Engine(hr_source, tr_source, cfg, menu=menu, scanner=scanner, factory=factory, demo=demo)
     if not menu:                        # `--now`: sin menu, arranca con la sesion guardada
         eng.workout = eng.spec.build()
+        if eng.spec.kind == "race":
+            eng.start_race()
     eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
     if dual and len(eng.views) < 2:
         print("--dual necesita dos vistas (--3d-view pista --3d-view gauge): ventana unica.")
@@ -257,14 +259,20 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     never_opened = False  # err antes de win: sin display, esta ruta no tiene sentido
     last_push = 0.0
     last_block = None
+    poll_acc = 0.0
     seen_state: dict = {}
     try:
         while seconds is None or seconds > 0:
             # En el menu se sondea a 10 Hz (un clic no puede esperar 1 s) y el snapshot sale a
             # ~2 Hz mas uno inmediato tras cada evento; rodando, todo a 1 Hz como siempre.
-            tick = 0.1 if eng.phase == "menu" else 1.0
+            fast = eng.phase == "menu" or eng.race_active()    # carrera: 10 Hz (la fisica y el fantasma van a 0,1 s)
+            tick = 0.1 if fast else 1.0
             await asyncio.sleep(tick)
-            s, closed = eng.poll()
+            eng.step_race(tick)
+            poll_acc += tick
+            if eng.phase == "menu" or not eng.race_active() or poll_acc >= 1.0 - 1e-9:
+                poll_acc = 0.0                                 # el muestreo de la sesion sigue a 1 Hz
+                s, closed = eng.poll()
             if seconds is not None:
                 seconds -= tick
             for slot, src in (("FC", eng.hr), ("rodillo", eng.tr)):    # estado de cada sensor

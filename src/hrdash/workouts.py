@@ -19,6 +19,8 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass, field, replace
 
+from . import race as racemod
+
 KINDS = ("warmup", "work", "rest", "cooldown", "free")
 KIND_LABELS = {"warmup": "Calentamiento", "work": "Trabajo", "rest": "Recuperacion",
                "cooldown": "Enfriamiento", "free": "Libre"}
@@ -463,15 +465,18 @@ class CustomSpec:
 
 @dataclass(frozen=True)
 class SessionSpec:
-    kind: str = "free"              # "free" | "preset" | "custom"
+    kind: str = "free"              # "free" | "preset" | "custom" | "race"
     minutes: int = 0                # sesion libre; 0 = sin limite
     preset: str = "noruego"
     custom: CustomSpec = CustomSpec()
+    race: racemod.PursuitSpec = racemod.PursuitSpec()    # persecucion contra fantasma (kind == "race")
 
     def build(self) -> Workout | None:
         """El plan a seguir, o None si la sesion es libre y sin limite (solo cronometro)."""
         if self.kind == "free":
             return free(self.minutes) if self.minutes > 0 else None
+        if self.kind == "race":
+            return None                 # la carrera tiene su propio modelo (`race.PursuitRace`), no un plan de bloques
         if self.kind == "preset":
             return PRESETS[self.preset]
         c = self.custom
@@ -481,6 +486,8 @@ class SessionSpec:
         """Una linea para el menu: "NORUEGO 4X4 - 40 MIN"."""
         if self.kind == "free":
             return "LIBRE - " + (fmt_total(self.minutes * 60) if self.minutes > 0 else "SIN LIMITE")
+        if self.kind == "race":
+            return self.race.summary()
         w = self.build()
         return f"{w.name.upper()} - {fmt_total(w.total_s)}"
 
@@ -517,8 +524,11 @@ def apply_act(spec: SessionSpec, act) -> SessionSpec | None:
     if not isinstance(act, str):
         return None
     p = act.split(":")
+    if p[0] == "race":
+        new = racemod.apply_act(spec.race, act)
+        return None if new is None else replace(spec, kind="race", race=new)
     if p[0] == "kind":
-        if len(p) == 2 and p[1] in ("free", "custom"):
+        if len(p) == 2 and p[1] in ("free", "custom", "race"):
             return replace(spec, kind=p[1])
         if len(p) == 3 and p[1] == "preset" and p[2] in PRESETS:
             return replace(spec, kind="preset", preset=p[2])
@@ -554,6 +564,7 @@ def apply_act(spec: SessionSpec, act) -> SessionSpec | None:
 def spec_to_dict(s: SessionSpec) -> dict:
     c = s.custom
     return {"kind": s.kind, "minutes": s.minutes, "preset": s.preset,
+            "race": racemod.spec_to_dict(s.race),
             "custom": {"warm": c.warm, "reps": c.reps, "work_s": c.work_s, "rest_s": c.rest_s,
                        "cool": c.cool, "work": c.work, "rest": c.rest}}
 
@@ -563,11 +574,13 @@ def spec_from_dict(d) -> SessionSpec:
     try:
         c = d.get("custom") or {}
         cu = CustomSpec(c["warm"], c["reps"], c["work_s"], c["rest_s"], c["cool"], c["work"], c["rest"])
-        s = SessionSpec(d["kind"], d["minutes"], d["preset"], cu)
+        rd = d.get("race")             # configs anteriores a las carreras no la traen: valores por defecto
+        s = SessionSpec(d["kind"], d["minutes"], d["preset"], cu,
+                        racemod.spec_from_dict(rd) if rd is not None else racemod.PursuitSpec())
     except (KeyError, TypeError, AttributeError) as exc:
         raise ValueError(f"sesion mal formada: {exc}") from exc
     ints = (s.minutes, cu.warm, cu.reps, cu.work_s, cu.rest_s, cu.cool)
-    if s.kind not in ("free", "preset", "custom") or s.preset not in PRESETS \
+    if s.kind not in ("free", "preset", "custom", "race") or s.preset not in PRESETS \
             or cu.work not in WORK_LEVELS or cu.rest not in REST_LEVELS \
             or not all(isinstance(v, int) and not isinstance(v, bool) for v in ints) \
             or not (0 <= s.minutes <= MAX_MIN and 0 <= cu.warm <= WARM_MAX and 0 <= cu.cool <= COOL_MAX
