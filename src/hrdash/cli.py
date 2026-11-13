@@ -238,7 +238,7 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
     eng = Engine(hr_source, tr_source, cfg, menu=menu, scanner=scanner, factory=factory, demo=demo)
     if not menu:                        # `--now`: sin menu, arranca con la sesion guardada
         eng.workout = eng.spec.build()
-        if eng.spec.kind == "race":
+        if eng.spec.kind in ("race", "scratch"):
             eng.start_race()
     eng.views = [v for v in (views or ["gauge"]) if v in SCENES_VIEWS]
     if dual and len(eng.views) < 2:

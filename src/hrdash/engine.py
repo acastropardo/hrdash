@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 
-from . import proto, race, racelog, workouts
+from . import peloton, proto, race, racelog, workouts
 from .config import Config
 from .history import Session
 from .laps import LapTracker
@@ -261,13 +261,19 @@ class Engine:
                 src.reset_clock()
         self._dist0 = self._trainer_dist()
         self.phase = "running"
-        if self.spec.kind == "race":
+        if self.spec.kind in ("race", "scratch"):
             self.start_race()
 
     # ------------------------------------------------------------ carrera (persecucion contra fantasma)
     def start_race(self) -> None:
         """Crea la persecucion elegida y arranca su cuenta atras. El fantasma "mi mejor marca" sale del historial
         (`racelog`); sin marca previa en esa distancia corre el de ritmo y se avisa."""
+        if self.spec.kind == "scratch":
+            # scratch: el jugador contra un pelotón de IA cuyo FTP sale del FTP de la configuracion
+            self.race_note, self.race_pb = "", None
+            self.race = peloton.ScratchRace(self.spec.scratch, float(self.config.ftp), float(self.config.weight) + 8.0)
+            self.race.start()
+            return
         spec = self.spec.race
         phys = race.Physics(mass=float(self.config.weight) + 8.0)     # ciclista + bici
         ghost_power, self.race_note = None, ""
@@ -293,7 +299,7 @@ class Engine:
         was = r.state
         w = getattr(self.tr, "watts", None) if self.tr else None
         r.step(dt, float(w) if w is not None else 0.0)
-        if was != "finished" and r.state == "finished" and r.final_s is not None:
+        if was != "finished" and r.state == "finished" and getattr(r, "final_s", None) is not None:
             self.race_pb = racelog.add(racelog.record_from_race(r))
 
     def race_info(self) -> dict | None:
@@ -306,7 +312,7 @@ class Engine:
         d["wheel_kmh"] = None if wheel is None else round(float(wheel), 1)     # la velocidad real de la rueda, como dato
         if self.race_note:
             d["note"] = self.race_note
-        if r.state == "finished":
+        if r.state == "finished" and d.get("event") == "persecucion":
             d["pb"] = bool(self.race_pb)
         return d
 
@@ -384,6 +390,16 @@ class Engine:
         if s.kind == "race":
             return {**workouts.spec_to_dict(s), "summary": s.summary(), "name": "Persecucion individual",
                     "total_s": 0, "lines": self.race_hint(), "profile": []}
+        if s.kind == "scratch":
+            sc = s.scratch
+            lo, hi = peloton.LEVEL_RANGE[sc.level]
+            ftp = int(self.config.ftp)
+            return {**workouts.spec_to_dict(s), "summary": s.summary(), "name": "Scratch contra el peloton",
+                    "total_s": 0, "profile": [],
+                    "lines": [f"{peloton.N_RIVALS} RIVALES DE {int(ftp * lo)} A {int(ftp * hi)} W DE FTP",
+                              f"{sc.distance_m() // 1000} KM EN {sc.laps} VUELTAS DE 250 M",
+                              "GANA EL PRIMERO EN CRUZAR LA META",
+                              "SALIDA PARADA, CUENTA ATRAS DE 3 S"]}
         return {**workouts.spec_to_dict(s), "summary": s.summary(),
                 "name": w.name if w else "Libre sin limite", "total_s": w.total_s if w else 0,
                 "lines": workouts.describe(w), "profile": workouts.profile(w)}

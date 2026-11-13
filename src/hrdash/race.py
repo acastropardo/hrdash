@@ -34,19 +34,21 @@ class Physics:
     mass: float = 83.0        # kg, ciclista + bici
     rho: float = 1.2          # kg/m3
 
-    def resist(self, v: float) -> float:
-        """Potencia que consume avanzar a `v` m/s (aire + rodadura)."""
-        return 0.5 * self.rho * self.cda * v ** 3 + self.crr * self.mass * G * v
+    def resist(self, v: float, draft: float = 0.0) -> float:
+        """Potencia que consume avanzar a `v` m/s (aire + rodadura). `draft` (0..0,6) es la fraccion de
+        resistencia del aire que se ahorra yendo a rueda de otro corredor."""
+        d = min(max(draft, 0.0), 0.6)
+        return 0.5 * self.rho * self.cda * v ** 3 * (1.0 - d) + self.crr * self.mass * G * v
 
-    def step(self, v: float, power_w: float, dt: float) -> float:
+    def step(self, v: float, power_w: float, dt: float, draft: float = 0.0) -> float:
         """Velocidad tras `dt` s a esa potencia: balance de energia cinetica con la resistencia en el punto
         medio (estable con pasos de 0,1 s, y arranca desde parado). Nunca negativa ni NaN."""
         p = min(max(float(power_w), 0.0), POWER_MAX) if power_w == power_w else 0.0
         v = min(max(float(v), 0.0), MAX_SPEED)
         e = 0.5 * self.mass * v * v
-        v1 = math.sqrt(max(0.0, 2.0 * (e + (p - self.resist(v)) * dt) / self.mass))
+        v1 = math.sqrt(max(0.0, 2.0 * (e + (p - self.resist(v, draft)) * dt) / self.mass))
         vm = 0.5 * (v + v1)
-        e1 = e + (p - self.resist(vm)) * dt
+        e1 = e + (p - self.resist(vm, draft)) * dt
         return min(MAX_SPEED, math.sqrt(max(0.0, 2.0 * e1 / self.mass)))
 
     def steady_speed(self, power_w: float) -> float:
