@@ -394,11 +394,15 @@ class Engine:
             sc = s.scratch
             lo, hi = peloton.LEVEL_RANGE[sc.level]
             ftp = int(self.config.ftp)
-            return {**workouts.spec_to_dict(s), "summary": s.summary(), "name": "Scratch contra el peloton",
+            pts = sc.event == "points"
+            rule = (f"SPRINT CADA {peloton.SPRINT_EVERY} VUELTAS: 5-3-2-1 PUNTOS; LA META VALE EL DOBLE" if pts
+                    else "GANA EL PRIMERO EN CRUZAR LA META")
+            return {**workouts.spec_to_dict(s), "summary": s.summary(),
+                    "name": "Carrera por puntos" if pts else "Scratch contra el peloton",
                     "total_s": 0, "profile": [],
                     "lines": [f"{peloton.N_RIVALS} RIVALES DE {int(ftp * lo)} A {int(ftp * hi)} W DE FTP",
                               f"{sc.distance_m() // 1000} KM EN {sc.laps} VUELTAS DE 250 M",
-                              "GANA EL PRIMERO EN CRUZAR LA META",
+                              rule + (" (GANA QUIEN SUMA MAS)" if pts else ""),
                               "SALIDA PARADA, CUENTA ATRAS DE 3 S"]}
         return {**workouts.spec_to_dict(s), "summary": s.summary(),
                 "name": w.name if w else "Libre sin limite", "total_s": w.total_s if w else 0,
