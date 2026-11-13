@@ -160,7 +160,7 @@ def layers_to_json(layers) -> list:
 
 def build_snapshot(session, config, laps, hr_source, tr_source,
                    view="hr", views=None, zoom_cmd=(0, 0), standalone=False,
-                   cam_cmd=0, hud_cmd=0, phase="running", menu=None, workout=None, paused=False) -> dict:
+                   cam_cmd=0, hud_cmd=0, phase="running", menu=None, workout=None, paused=False, race=None) -> dict:
     """Construye el snapshot. Es el unico builder: lo usan la TUI y el motor, para que
     el esquema no se duplique y el harness valide una sola fuente."""
     hr = int(session.current_hr or (getattr(hr_source, "latest_hr", None) or 0))
@@ -208,4 +208,5 @@ def build_snapshot(session, config, laps, hr_source, tr_source,
         **({"menu": menu} if menu is not None else {}),   # estado del menu: solo en fase menu
         **({"paused": True} if paused else {}),        # sesion en pausa (espacio): clave solo si lo esta
         **({"workout": workout} if workout is not None else {}),   # plan en curso (Engine.plan_info)
+        **({"race": race} if race is not None else {}),           # carrera en curso (Engine.race_info), aditiva
     }

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 
-from . import proto, workouts
+from . import proto, race, racelog, workouts
 from .config import Config
 from .history import Session
 from .laps import LapTracker
@@ -71,6 +71,9 @@ class Engine:
         self.spec = config.session              # sesion elegida en el menu (se guarda al salir)
         self.page = "sensores"                  # pagina visible del menu: "sensores" | "sesion"
         self.workout = None                     # plan de la sesion en curso (None = libre sin limite)
+        self.race = None                        # persecucion en curso (race.PursuitRace) o None
+        self.race_note = ""                     # aviso al jugador (p. ej. no hay marca previa para el fantasma)
+        self.race_pb: bool | None = None        # al terminar: si fue record personal
 
     # ------------------------------------------------------------ fuentes
     @property
@@ -250,6 +253,7 @@ class Engine:
         del rodillo (que corre desde que se conecto) vuelve a cero."""
         self._cancel_scan()                 # escanear mientras se rueda estorba a las conexiones
         self.workout = self.spec.build()    # el plan elegido; la fase 4 lo sigue durante la sesion
+        self.race = None
         self.session.reset()
         self.laps.reset()
         for src in (self.hr, self.tr):
@@ -257,6 +261,54 @@ class Engine:
                 src.reset_clock()
         self._dist0 = self._trainer_dist()
         self.phase = "running"
+        if self.spec.kind == "race":
+            self.start_race()
+
+    # ------------------------------------------------------------ carrera (persecucion contra fantasma)
+    def start_race(self) -> None:
+        """Crea la persecucion elegida y arranca su cuenta atras. El fantasma "mi mejor marca" sale del historial
+        (`racelog`); sin marca previa en esa distancia corre el de ritmo y se avisa."""
+        spec = self.spec.race
+        phys = race.Physics(mass=float(self.config.weight) + 8.0)     # ciclista + bici
+        ghost_power, self.race_note = None, ""
+        if spec.ghost == "best":
+            prev = racelog.best(spec.distance_m)
+            if prev is not None:
+                ghost_power = race.series_power(prev["power"])
+            else:
+                self.race_note = "SIN MARCA PREVIA: FANTASMA DE RITMO"
+        self.race = race.PursuitRace(spec, phys, ghost_power)
+        self.race_pb = None
+        self.race.start()
+
+    def race_active(self) -> bool:
+        """Hay una carrera que pide 10 Hz (cuenta atras o en marcha)."""
+        return self.race is not None and self.race.state in ("countdown", "running")
+
+    def step_race(self, dt: float) -> None:
+        """Avanza la carrera `dt` s con la ultima potencia del rodillo (0 sin lectura). Al terminar guarda la marca."""
+        r = self.race
+        if r is None or self.phase != "running":
+            return
+        was = r.state
+        w = getattr(self.tr, "watts", None) if self.tr else None
+        r.step(dt, float(w) if w is not None else 0.0)
+        if was != "finished" and r.state == "finished" and r.final_s is not None:
+            self.race_pb = racelog.add(racelog.record_from_race(r))
+
+    def race_info(self) -> dict | None:
+        """Clave `race` del snapshot: el estado de la carrera mas lo que el cliente necesita aparte."""
+        r = self.race
+        if r is None or self.phase != "running":
+            return None
+        d = r.to_dict()
+        wheel = getattr(self.tr, "speed_kmh", None) if self.tr else None
+        d["wheel_kmh"] = None if wheel is None else round(float(wheel), 1)     # la velocidad real de la rueda, como dato
+        if self.race_note:
+            d["note"] = self.race_note
+        if r.state == "finished":
+            d["pb"] = bool(self.race_pb)
+        return d
 
     async def handle_ui(self, ui) -> bool:
         """Evento de la interfaz de la ventana (`{"act": id}`). True si cambio algo y conviene
@@ -340,6 +392,10 @@ class Engine:
 
     def block_label(self) -> str | None:
         """"Esfuerzo 2/4" del bloque actual; "libre" si el plan ya termino; None sin plan."""
+        if self.race is not None and self.phase == "running":
+            st = self.race.state
+            return "Salida" if st in ("ready", "countdown") else "libre" if st == "finished" \
+                else f"Vuelta {self.race.lap()}/{self.race.laps}"
         if self.workout is None or self.phase != "running":
             return None
         pos = self._plan_pos()
@@ -389,9 +445,13 @@ class Engine:
         if self.session.paused:
             self.session.resume()
             self._dist0 += self._trainer_dist() - self._pause_dist
+            if self.race is not None:
+                self.race.resume()
         else:
             self.session.pause()
             self._pause_dist = self._trainer_dist()
+            if self.race is not None:
+                self.race.pause()
         return True
 
     def poll(self) -> tuple:
@@ -412,6 +472,10 @@ class Engine:
         dist = getattr(self.tr, "dist_m", None) if self.tr else None
         if dist is not None:
             dist = max(0, int(dist) - self._dist0)
+        if self.race is not None and self.race.state != "ready":
+            # en carrera la velocidad y la distancia son las virtuales (de la potencia); la rueda va en `race.wheel_kmh`
+            spd = self.race.v * 3.6
+            dist = int(self.race.s)
         s = self.session.add(hr, watts=w, cadence=cad, speed_kmh=spd, dist_m=dist,
                              bloque=self.block_label())
         return (s, self.laps.add(s))
@@ -426,7 +490,8 @@ class Engine:
                                    views=views, zoom_cmd=zoom_cmd,
                                    standalone=True, phase=self.phase,
                                    menu=self.menu_info() if menu else None,
-                                   workout=self.plan_info(), paused=self.session.paused)
+                                   workout=self.plan_info(), paused=self.session.paused,
+                                   race=self.race_info())
 
     def handle_key(self, name: str) -> bool:
         """Tecla procesada por el motor en standalone. True si fue `q` (salir y grabar).
@@ -444,6 +509,8 @@ class Engine:
             self.session.reset()
             self.laps.reset()
             self._dist0 = self._trainer_dist()      # reiniciar tambien pone la distancia a 0
+            if self.race is not None:
+                self.start_race()                   # y la carrera vuelve a la cuenta atras
         elif name == "s":
             for src in (self.hr, self.tr):
                 if src is not None and hasattr(src, "request_reconnect"):

@@ -36,6 +36,18 @@ Cliente -> motor:
   reales (suelta el simulador, recupera la ultima banda y rodillo guardados y refresca el escaneo). El menu lleva
   `can_real: true` cuando el motor entiende `real`; `--simulate` solo decide en que modo arranca (`Engine(demo=...)`).
 
+## Carrera (persecucion contra fantasma)
+
+- Acciones `ui` nuevas: `kind:race`, `race:dist:+|-` (1-4 km), `race:ghost:pace|best` y `race:target:+|-` (pasos de 5 s). La
+  sesion elegida (`menu.session`) lleva `kind: "race"` y la clave `race` con distancia, fantasma y tiempo objetivo.
+- Al pulsar Play con `kind == "race"` el motor crea `race.PursuitRace` (cuenta atras de 3 s, salida parada) y, mientras
+  corre, sondea a 10 Hz: cada snapshot trae la clave aditiva `race` = `{event, state, paused, distance_m, t, s: [jugador,
+  fantasma], v: [km/h jugador, km/h fantasma], gap_s, gap_m, lap, laps, splits, countdown, wheel_kmh, note?, final_s?,
+  ghost_s?, pb?}`. `speed`, `dist_km` y la posicion en la pista de la sesion son los virtuales (de la potencia); la velocidad
+  de la rueda va en `race.wheel_kmh`. El muestreo de la sesion sigue a 1 Hz (CSV/FIT con `Salida`, `Vuelta n/N`, `libre`).
+- `space` pausa la carrera y la sesion; `x` reinicia la carrera (cuenta atras otra vez). Al terminar se guarda la marca en
+  `races.json` (junto a `config.toml`) y `race.pb` dice si fue record personal. `PROTOCOL` no cambia (clave aditiva).
+
 ## Verificacion
 
 El harness vive fuera de este repo (convencion de AGENTS.md); esta en `hrdash-godot/harness/
