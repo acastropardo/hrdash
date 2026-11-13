@@ -96,3 +96,11 @@ es record si se gana (`pos == 1`) y mejora el tiempo (scratch) o los puntos (pun
 `summary()` devuelve `{n, wins, km, records:[{label, value, date, n, trend, lower_better}], recent:[{date, label, value, pos,
 won}]}`, que el menu lleva en la clave nueva `history` de `menu` (se relee solo si cambia el archivo). `race.pb` pasa a
 valer tambien en el scratch.
+
+
+## Dificultad de los rivales (seis niveles)
+
+`peloton.LEVELS = vsoft, soft, mid, midhard, strong, vstrong` (MUY SUAVE ... SUPER FUERTE): rangos de FTP 0,57-0,71 hasta
+0,92-1,06 del FTP del jugador (paso 0,07; con 240 W, el mas alto da rivales de 220 a 254 W). Acto `scratch:level:next` da la
+vuelta (tecla D del cliente), `+`/`-` con tope, o el id. Las configs e historiales antiguos se leen con `norm_level`
+(easy -> midhard, even y hard -> vstrong). Por defecto `vstrong`, igual que el antiguo "parejos".
