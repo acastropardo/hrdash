@@ -70,6 +70,13 @@ new that is rebuilt per frame in pure Python must fit the ~16 ms budget together
 slot (measured: gauge ~3 ms, pista ~7 ms). Plans and
 offscreen-render checks for this work are in `docs/plans/velodromo-render.md`.
 
+GPU objects: every layer upload creates a moderngl buffer **and** a VAO, and `VertexArray.release()` does
+not free the buffer. Always free a VAO from `_upload` with `glview.free_va(va)` (it also drops the
+`_VA_FMT`/`_VA_BUF` entries); a plain `va.release()` leaked one buffer per per-frame layer and frame
+(~18 MB/s in the mixed view, the system ran out of memory after ~20 min on a 16 GB Mac). Check memory
+with the child's RSS over a minute or two (`ps -o rss= -p $(pgrep -f hrdash.glview)`); it must stay flat
+(~230 MB under Mesa).
+
 ## Dial text layout
 
 Texts inside a dial (`cluster.dial_static` / `dial_values`) are laid out in radius units and
