@@ -1,0 +1,54 @@
+# hrdash --stream: el motor para clientes graficos externos
+
+Objetivo: un solo motor (BLE, sesion, FIT, menu, plan) y varios clientes graficos que hablan el
+mismo protocolo: la ventana OpenGL (`hrdash`), la consola (`--ascii`) y un cliente externo como el
+de Godot (`--stream`). Cada arreglo de BLE, FIT o plan se hace una vez, aqui.
+
+## Que cambia
+
+- `src/hrdash/stream.py`: `StreamHost`, con la interfaz de `GLHost` (`start`, `alive`, `push`,
+  `drain`, `stop`, `error`) sobre un servidor WebSocket en 127.0.0.1. Corre en un hilo propio con su
+  bucle de asyncio; el motor no espera a la red. Aguanta sin cliente, con varios y con clientes que
+  se caen; el que conecta recibe al instante el ultimo snapshot (el menu aparece sin esperar).
+- `cli.py`: `--stream` (en el grupo exclusivo de modos; `--simulate` y `--now` siguen fuera) y
+  `--port` (default 8765). Con `--stream` no se abre ventana: el motor espera cliente. `--dual` no
+  aplica. `cmd_3d` no cambia de flujo: solo cierra el host DESPUES de exportar si el host lo pide
+  (`keeps_open`), para que el cliente reciba el `summary` por la conexion abierta, como hoy se
+  imprime en consola.
+- `proto.py`: `PROTOCOL = 2`, documentando `hello` y `summary`. Los snapshots no cambian; el hijo
+  OpenGL no recibe esos mensajes.
+- `pyproject.toml`: extra `stream = ["websockets>=12"]`; el nucleo no lo exige.
+
+## Contrato (aditivo; un cambio incompatible sube `PROTOCOL`)
+
+Motor -> cliente (un JSON por mensaje):
+- `{"hello": {"protocol": N, "views": [...], "app": "hrdash"}}` al conectar.
+- snapshot: el de `proto.build_snapshot` (con `phase`, `menu`, `workout`, `paused` opcionales) mas
+  `version`. 1 Hz rodando, 2 Hz en el menu y uno inmediato tras cada accion `ui`.
+- `{"summary": {...}}` al salir, tras exportar.
+
+Cliente -> motor:
+- `{"hello": {"client": "godot", "views": [...]}}`: cuenta la ventana como abierta.
+- `{"key": "q|x|s|space"}`, `{"views": [...]}`, `{"zoom": ...}`.
+- `{"ui": {"act": "<id>"}}`: las acciones del menu (`Engine.handle_ui`: `play`, `scan`, `dev:<id>`,
+  `page:sesion`, `kind:preset:noruego`, `min:set:30`, `cu:warm:+`...).
+
+## Verificacion
+
+El harness vive fuera de este repo (convencion de AGENTS.md); esta en `hrdash-godot/harness/
+test_stream.py` y lanza `hrdash --simulate --stream` contra un cliente WebSocket falso:
+
+- `hello` con protocolo 2; snapshot de fase menu valido (`proto.validate`) con bloque `menu`.
+- Un segundo cliente recibe `hello` y el ultimo snapshot al conectar; si se cae, el motor sigue.
+- Acciones `ui`: `page:sesion`, `kind:preset:noruego`, `play` -> fase `running` con `workout`.
+- `version` creciente, snapshot rodando valido, pausa y reanuda con `space`, cambio de `views`.
+- `q` entrega el `summary`, deja el CSV exportado y el motor sale con 0.
+- Puerto ocupado: sale con 2 y un mensaje.
+- Sin regresion: `--simulate --duration 3` (FIT round-trip) y el camino OpenGL (`cmd_3d` con
+  `GLHost` bajo xvfb) se comprobaron igual que antes.
+
+## Riesgos
+
+- `websockets` en un hilo propio dentro de `cmd_3d`: el cierre (`q`) deja el export en el hilo
+  principal y el host abierto hasta `send_summary`, con un tope de 2 s si el cliente no lee.
+- El protocolo es el punto de ruptura entre repos: cambios solo aditivos y version en el `hello`.

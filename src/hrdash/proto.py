@@ -12,6 +12,11 @@ Las capas de escena ya son serializables: `Mesh.v` es una lista plana de floats 
 `layers_to_json` la emite como `{"layer": nombre, "v": [...]}` con `None` para la capa
 cacheada. Un renderer futuro consume eso sin importar `cluster.py`.
 
+Protocolo 2 (aditivo sobre el 1): el canal WebSocket de `stream.py` (`hrdash --stream`) anade el
+mensaje `hello` del motor al conectar (`{"hello": {"protocol", "views", "app"}}`), el `hello` del
+cliente (`{"hello": {"client", "views"}}`) y `{"summary": {...}}` al salir. Los snapshots no
+cambian; el hijo OpenGL ignora los mensajes que no conoce.
+
 El `version` es el numero de protocolo, no el de la app. Se sube solo si cambia el
 esquema; el hijo debe tolerar claves desconocidas (recibe el dict entero, `validate`
 solo informa, nunca levanta).
@@ -21,7 +26,7 @@ from __future__ import annotations
 
 import json
 
-PROTOCOL = 1
+PROTOCOL = 2
 
 # Orden de recorrido con las flechas, igual en la consola y en standalone (ui.py lo usa
 # para `← →` y glview para el ciclo en la ventana).
