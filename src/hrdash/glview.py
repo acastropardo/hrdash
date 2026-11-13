@@ -335,6 +335,20 @@ FORMATS = {
 }
 _FMT_PROGS: dict = {}
 _VA_FMT: dict = {}                        # id(VAO) -> formato, para el estado de mezcla
+_VA_BUF: dict = {}                        # id(VAO) -> su buffer (VertexArray.release no lo libera)
+
+
+def free_va(va) -> None:
+    """Libera un VAO de `_upload` con su buffer y sus entradas auxiliares. Soltar solo el VAO dejaba
+    vivo un buffer por capa y fotograma (las capas por frame: agujas, ciclista): ~18 MB/s."""
+    buf = _VA_BUF.pop(id(va), None)
+    _VA_FMT.pop(id(va), None)
+    for obj in (va, buf):
+        try:
+            if obj is not None:
+                obj.release()
+        except Exception:  # noqa: BLE001 - ya liberado o contexto cerrado: nada que hacer
+            pass
 
 
 def _fmt_prog(ctx, fmt):
@@ -364,11 +378,13 @@ def _upload(ctx, prog, mesh, np, moderngl):
             buf = ctx.buffer(np.asarray(mesh.v if len(mesh.v) else [0.0] * width, dtype="f4").tobytes())
             va = ctx.vertex_array(fprog, [(buf, attr, *fields)])
             _VA_FMT[id(va)] = fmt
+            _VA_BUF[id(va)] = buf
             return va, fprog
         mesh = mesh.to_mesh()
     buf = ctx.buffer(np.asarray(mesh.v if len(mesh.v) else [0.0] * 10, dtype="f4").tobytes())
     va = ctx.vertex_array(prog, [(buf, VATTR, *FIELDS)])
     _VA_FMT[id(va)] = None
+    _VA_BUF[id(va)] = buf
     return va, prog
 
 
@@ -2231,7 +2247,7 @@ def child_main() -> None:
                             if old is not None:                   # venia de otra disposicion
                                 glfw.make_context_current(win)
                                 for va in old[6].values():
-                                    va.release()
+                                    free_va(va)
                             try:                                  # la primaria se muda a su monitor
                                 glfw.set_window_monitor(win, mon, int(xa), int(ya), size[0], size[1],
                                                         glfw.DONT_CARE)
@@ -2340,7 +2356,7 @@ def child_main() -> None:
                     try:
                         glfw.make_context_current(win)
                         for va in vaos.values():
-                            va.release()
+                            free_va(va)
                     except Exception:  # noqa: BLE001
                         pass
                     if primary is None or win != primary[0]:
@@ -2393,7 +2409,7 @@ def child_main() -> None:
                         continue                       # capa sin cambios: conserva su VBO
                     old = vaos.get(name)
                     if old is not None:
-                        old.release()
+                        free_va(old)
                     vaos[name], _p = _upload(ctx, prog, mesh, np, moderngl)
                 eye, center, up, fovy = cam[:4]
                 far = cam[4] if len(cam) > 4 else 80.0     # la pista necesita mas fondo
@@ -2431,7 +2447,7 @@ def child_main() -> None:
             try:
                 glfw.make_context_current(win)
                 for va in vaos.values():
-                    va.release()
+                    free_va(va)
             except Exception:  # noqa: BLE001
                 pass
         for w in _uniq(s[1] for s in slots):
