@@ -411,13 +411,15 @@ class Engine:
             lo, hi = peloton.LEVEL_RANGE[sc.level]
             ftp = int(self.config.ftp)
             pts = sc.event == "points"
+            elim = sc.event == "elimination"
             rule = (f"SPRINT CADA {peloton.SPRINT_EVERY} VUELTAS: 5-3-2-1 (META X2)" if pts
+                    else f"CADA {peloton.ELIM_EVERY} VUELTAS SALE EL ULTIMO EN CRUZAR; GANA EL QUE QUEDA" if elim
                     else "GANA EL PRIMERO EN CRUZAR LA META")
             return {**workouts.spec_to_dict(s), "summary": s.summary(),
-                    "name": "Carrera por puntos" if pts else "Scratch contra el peloton",
+                    "name": "Carrera por puntos" if pts else "Eliminacion" if elim else "Scratch contra el peloton",
                     "total_s": 0, "profile": [],
                     "lines": [f"{peloton.N_RIVALS} RIVALES DE {int(ftp * lo)} A {int(ftp * hi)} W DE FTP",
-                              f"{sc.distance_m() // 1000} KM EN {sc.laps} VUELTAS DE 250 M",
+                              f"{sc.distance_m() / 1000:g} KM EN {sc.eff_laps()} VUELTAS DE 250 M",
                               rule,
                               "SALIDA PARADA, CUENTA ATRAS DE 3 S"]}
         return {**workouts.spec_to_dict(s), "summary": s.summary(),

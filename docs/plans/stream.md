@@ -104,3 +104,13 @@ valer tambien en el scratch.
 0,92-1,06 del FTP del jugador (paso 0,07; con 240 W, el mas alto da rivales de 220 a 254 W). Acto `scratch:level:next` da la
 vuelta (tecla D del cliente), `+`/`-` con tope, o el id. Las configs e historiales antiguos se leen con `norm_level`
 (easy -> midhard, even y hard -> vstrong). Por defecto `vstrong`, igual que el antiguo "parejos".
+
+
+## Prueba de eliminacion
+
+`ScratchSpec.event == "elimination"` (acto `scratch:event:elimination`; `+`/`-` recorren scratch, puntos, eliminacion). Cada 2 vueltas
+sale el ultimo activo en cruzar la linea; gana el que queda. Con el jugador y 3 rivales son 6 vueltas fijas (`eff_laps()`; el
+stepper de vueltas no aplica). Si el jugador sale, su carrera termina y el resto se simula; la clasificacion es por orden de salida
+inverso. Los eliminados se apartan a la linea exterior y no hacen rebufo ni estorban. La IA acelera antes de cada linea si va en
+los dos ultimos puestos o es velocista. Snapshot `race`: `mode: "elimination"`, `out`/`out_lap` por corredor, `elim_next`,
+`elim_to_m`, `left`, y `out`/`out_lap` en `results`. Historial: evento `elimination` (record = ganar mejorando el tiempo).

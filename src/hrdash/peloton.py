@@ -12,6 +12,10 @@ rebufo, y los rivales deciden su potencia con una táctica simple basada en un F
 - Pasar a otro corredor cambia de línea hacia fuera (q mayor) para no atravesarlo.
 Todo con semilla fija: la misma carrera sale igual (comprobable y repetible).
 
+Prueba de ELIMINACION (`event == "elimination"`): cada `ELIM_EVERY` vueltas, el último corredor activo en cruzar la línea queda
+eliminado (sale de la pista); gana el último que queda. Con el jugador y 3 rivales son 6 vueltas (3 eliminaciones); si el
+jugador queda eliminado su carrera termina y el resto se simula para dar la clasificación (por orden de salida inverso).
+
 Prueba de PUNTOS (`ScratchSpec.event == "points"`): mismo pelotón y misma física, pero cada `SPRINT_EVERY` vueltas hay un
 sprint intermedio (5/3/2/1 puntos a los cuatro primeros en cruzar la línea) y el sprint de la meta vale el doble; gana quien
 suma más puntos (empate: el que cruzó antes la meta). Atacantes y velocistas disputan los sprints intermedios con W'.
@@ -48,8 +52,9 @@ def norm_level(level) -> str | None:
     if level in LEVELS:
         return level
     return OLD_LEVELS.get(level) if isinstance(level, str) else None
-EVENTS = ("scratch", "points")
-EVENT_NAMES = {"scratch": "SCRATCH", "points": "PUNTOS"}
+EVENTS = ("scratch", "points", "elimination")
+EVENT_NAMES = {"scratch": "SCRATCH", "points": "PUNTOS", "elimination": "ELIMINACION"}
+ELIM_EVERY = 2                            # vueltas entre eliminaciones
 SPRINT_EVERY = 4                          # vueltas entre sprints intermedios (prueba de puntos)
 SPRINT_POINTS = (5, 3, 2, 1)              # puntos de un sprint intermedio por orden de cruce (la meta, el doble)
 N_RIVALS = 3
@@ -86,11 +91,15 @@ class ScratchSpec:
     seed: int = 7
     event: str = "scratch"          # "scratch" | "points"
 
+    def eff_laps(self) -> int:
+        """Vueltas reales de la prueba: las elegidas, salvo en la eliminación, que dura ELIM_EVERY por cada rival que sale."""
+        return ELIM_EVERY * N_RIVALS if self.event == "elimination" else self.laps
+
     def distance_m(self) -> int:
-        return int(self.laps * LAP_M)
+        return int(self.eff_laps() * LAP_M)
 
     def summary(self) -> str:
-        return f"{EVENT_NAMES[self.event]} {self.laps} VUELTAS - {LEVEL_NAMES[self.level]}"
+        return f"{EVENT_NAMES[self.event]} {self.eff_laps()} VUELTAS - {LEVEL_NAMES[self.level]}"
 
     def sprint_laps(self) -> list:
         """Vueltas completadas en cada sprint intermedio (la meta cuenta aparte, con puntos dobles)."""
@@ -159,6 +168,10 @@ class Rider:
         self.power = 0.0
         self.draft = 0.0
         self.finish_t: float | None = None
+        self.out = False               # eliminado (prueba de eliminación)
+        self.out_t: float | None = None
+        self.out_place = 0
+        self.out_lap = 0               # vuelta en la que salió
         self.pts = 0                   # puntos (prueba de puntos)
         self.sprint_pts: list = []     # puntos ganados en cada sprint, en orden (0 si no puntuo)
         # IA
@@ -204,8 +217,8 @@ class ScratchRace:
     def __init__(self, spec: ScratchSpec, ftp: float, mass: float, lap_m: float = LAP_M):
         self.spec = spec
         self.lap_m = lap_m
-        self.laps = spec.laps
-        self.dist = float(spec.laps * lap_m)
+        self.laps = spec.eff_laps()
+        self.dist = float(self.laps * lap_m)
         self.riders = make_field(spec, ftp, mass)
         self.state = "ready"            # ready -> countdown -> running -> finished
         self.paused = False
@@ -216,6 +229,11 @@ class ScratchRace:
         self.alerts: list = []          # [{t, text}] eventos para el cliente ("ATAQUE ROJO", "ULTIMA VUELTA"...)
         self._flags: set = set()
         self.points = spec.event == "points"
+        self.elim = spec.event == "elimination"
+        self.elim_lines = [int(n * lap_m) for n in range(ELIM_EVERY, self.laps + 1, ELIM_EVERY)] if self.elim else []
+        self._elim_cross: dict = {}         # nº de línea -> ids de los activos que ya cruzaron, en orden
+        self._elim_done = 0                 # líneas ya resueltas
+        self.over = False                   # eliminación: ya hay ganador
         self.sprints = [int(n * lap_m) for n in spec.sprint_laps()]    # distancia de cada sprint intermedio
         self._sprint_cross: dict = {}      # nº de sprint -> ids ya cruzados, en orden
         self.power_series: list = []
@@ -249,13 +267,13 @@ class ScratchRace:
         for r in self.riders:
             best = 0.0
             for o in self.riders:
-                if o is not r:
+                if o is not r and not o.out and not r.out:
                     best = max(best, draft_gain(o.s - r.s, o.q - r.q))
             r.draft = best
 
     def _ahead(self, r: Rider):
         """El corredor más cercano por delante (a menos de 15 m), o None."""
-        cand = [o for o in self.riders if o is not r and 0.0 < o.s - r.s < 15.0]
+        cand = [o for o in self.riders if o is not r and not o.out and 0.0 < o.s - r.s < 15.0]
         return min(cand, key=lambda o: o.s - r.s) if cand else None
 
     def _ai_power(self, r: Rider) -> float:
@@ -270,6 +288,14 @@ class ScratchRace:
         if left_laps <= r.sprint_laps:
             t_left = max(2.0, (self.dist - r.s) / max(r.v, 6.0))
             return min(2.3 * cp, cp + r.w / t_left) if r.w > 0.02 * r.w0 else 1.02 * cp
+        if r.out:
+            return 0.45 * cp
+        if self.elim:
+            alive = sorted([o for o in self.riders if not o.out], key=lambda o: -o.s)
+            rank = alive.index(r)
+            for ln in self.elim_lines[self._elim_done:self._elim_done + 1]:
+                if 0.0 < ln - r.s < 0.9 * self.lap_m and r.w > 0.12 * r.w0 and (rank >= len(alive) - 2 or r.role == "sprinter"):
+                    return min(1.9 * cp, cp + r.w / 5.0)      # no quedar el último en la línea
         if self.points and r.role != "rouleur":
             for k, sd in enumerate(self.sprints):
                 if 0.0 < sd - r.s < 0.7 * self.lap_m and k not in r.sprinted and r.w > 0.35 * r.w0:
@@ -296,10 +322,15 @@ class ScratchRace:
         LANE_HOLD_S antes de volver a la de abajo. Sin ese compromiso el corredor entraba y salía de la línea cada 0,1 s.
         Quien va a rueda de otro NO se mueve (el rebufo exige estar en su línea). El cambio de línea es suave (aceleración
         lateral acotada), no un salto."""
+        if r.out:                      # eliminado: se aparta a la línea exterior y rueda
+            r.tq = Q_MAX
+            err = r.tq - r.q
+            r.q = max(0.0, min(Q_MAX, r.q + max(-0.5 * dt, min(0.5 * dt, err))))
+            return
         blocker = None
         for o in self.riders:
             ds = o.s - r.s
-            if o is r or abs(o.q - r.q) >= LANE_GAP or not (-0.6 < ds < 6.0):
+            if o is r or o.out or abs(o.q - r.q) >= LANE_GAP or not (-0.6 < ds < 6.0):
                 continue
             closing = r.v > o.v + 0.15 or ds < 0.5
             tie = abs(ds) <= 0.6 and r.idx > o.idx              # lado a lado: se aparta el de mayor dorsal
@@ -342,6 +373,30 @@ class ScratchRace:
             r.pts += pts
             r.sprint_pts.append(pts)
 
+    def _elim_check(self, r: Rider, s0: float, s1: float) -> None:
+        """Al cruzar una línea de eliminación se anota el orden; cuando todos los activos la han cruzado, sale el último."""
+        for k, ln in enumerate(self.elim_lines):
+            if s0 < ln <= s1:
+                order = self._elim_cross.setdefault(k, [])
+                if r.idx not in order:
+                    order.append(r.idx)
+        while self._elim_done < len(self.elim_lines) and not self.over:
+            order = self._elim_cross.get(self._elim_done, [])
+            alive = [o for o in self.riders if not o.out]
+            if not all(o.idx in order for o in alive):
+                return
+            last = next(self.riders[i] for i in reversed(order) if not self.riders[i].out)
+            last.out, last.out_t, last.out_place = True, self.t, len(alive)
+            last.out_lap = self._elim_done * ELIM_EVERY + ELIM_EVERY
+            self._elim_done += 1
+            self._alert("ELIMINADO!" if last.is_player else f"ELIMINADO {last.name}")
+            if last.is_player:
+                last.finish_t = self.t
+            if len(alive) - 1 == 1:
+                win = next(o for o in alive if o is not last)
+                win.out_place, win.finish_t, self.over = 1, self.t, True
+                self._alert("GANA " + win.name if not win.is_player else "GANASTE")
+
     def _alert(self, text: str) -> None:
         self.alerts.append({"t": round(self.t, 1), "text": text})
         del self.alerts[:-6]
@@ -349,7 +404,7 @@ class ScratchRace:
     def _advance(self, dt: float, player_power: float) -> None:
         self._drafts()
         for r in self.riders:
-            if r.finish_t is not None:                    # tras la meta ruedan suave
+            if r.finish_t is not None or r.out:           # tras la meta (o eliminados) ruedan suave
                 r.power = 0.0 if r.is_player else 0.45 * r.cp
             elif r.is_player:
                 r.power = max(0.0, min(POWER_MAX, player_power if player_power == player_power else 0.0))
@@ -358,12 +413,14 @@ class ScratchRace:
         for r in self.riders:
             v1 = r.phys.step(r.v, r.power, dt, r.draft)
             s1 = r.s + 0.5 * (r.v + v1) * dt
-            if r.finish_t is None and s1 >= self.dist:
+            if not self.elim and r.finish_t is None and s1 >= self.dist:
                 r.finish_t = self.t + dt * (self.dist - r.s) / max(1e-9, s1 - r.s)
                 self.order.append(r.idx)
                 self._alert(f"META {r.name}" if not r.is_player else "META")
             if self.points:
                 self._sprint_check(r, r.s, s1, dt)
+            if self.elim and not r.out and not self.over:
+                self._elim_check(r, r.s, s1)
             r.v, r.s = v1, s1
             if not r.is_player:
                 self._update_w(r, dt)
@@ -397,22 +454,30 @@ class ScratchRace:
         """El jugador cruzó: se simula el resto del pelotón hasta la meta (de golpe) y se cierra la clasificación."""
         self.state = "finished"
         guard = 0
-        while any(r.finish_t is None for r in self.riders) and self.t < MAX_RACE_S and guard < 20000:
+        while ((not self.over) if self.elim else any(r.finish_t is None for r in self.riders)) \
+                and self.t < MAX_RACE_S and guard < 20000:
             self._advance(DT, 0.0)
             guard += 1
-        ranked = sorted(self.riders, key=lambda r: ((-r.pts if self.points else 0), (r.finish_t if r.finish_t is not None else 1e9), -r.s))
+        if self.elim:         # por orden de salida inverso: el que queda es 1.º, el último eliminado 2.º...
+            ranked = sorted(self.riders, key=lambda r: (r.out_place if r.out_place else 99, -r.s))
+        else:
+            ranked = sorted(self.riders, key=lambda r: ((-r.pts if self.points else 0), (r.finish_t if r.finish_t is not None else 1e9), -r.s))
         win = ranked[0].finish_t or 0.0
         self.results = [{"id": r.idx, "name": r.name, "color": r.color, "player": r.is_player,
-                         "time_s": None if r.finish_t is None else round(r.finish_t, 2), "pos": i + 1,
-                         "gap_s": None if r.finish_t is None else round(r.finish_t - win, 2),
-                         **({"pts": r.pts, "sprint_pts": list(r.sprint_pts)} if self.points else {})}
-                        for i, r in enumerate(ranked)]
+                         "time_s": None if t_end is None else round(t_end, 2), "pos": i + 1,
+                         "gap_s": None if t_end is None or self.elim else round(t_end - win, 2),
+                         **({"pts": r.pts, "sprint_pts": list(r.sprint_pts)} if self.points else {}),
+                         **({"out": r.out, "out_lap": r.out_lap} if self.elim else {})}
+                        for i, r in enumerate(ranked) for t_end in [r.finish_t if r.finish_t is not None else r.out_t]]
 
     # -- clasificación en vivo
     def standings(self) -> list:
         """Orden actual: los que ya cruzaron por tiempo de llegada y el resto por distancia recorrida."""
         if self.points:       # puntos: manda la suma de puntos; a igualdad, quien cruzó antes la meta y luego quien va delante
             return sorted(self.riders, key=lambda r: (-r.pts, r.finish_t if r.finish_t is not None else 1e9, -r.s))
+        if self.elim:         # activos por distancia y, detrás, los eliminados por orden de salida inverso
+            alive = sorted([r for r in self.riders if not r.out], key=lambda r: -r.s)
+            return alive + sorted([r for r in self.riders if r.out], key=lambda r: r.out_place)
         done = sorted([r for r in self.riders if r.finish_t is not None], key=lambda r: r.finish_t)
         rest = sorted([r for r in self.riders if r.finish_t is None], key=lambda r: -r.s)
         return done + rest
@@ -433,13 +498,19 @@ class ScratchRace:
              "riders": [{"id": r.idx, "name": r.name, "color": r.color, "player": r.is_player, "s": round(r.s, 1),
                          "q": round(r.q, 2), "v": round(r.v * 3.6, 1), "pos": pos[r.idx], "draft": round(r.draft, 2),
                          "gap_m": round(lead.s - r.s, 1) if r.finish_t is None else 0.0,
-                         **({"pts": r.pts} if self.points else {})} for r in self.riders],
+                         **({"pts": r.pts} if self.points else {}),
+                         **({"out": r.out, "out_lap": r.out_lap} if self.elim else {})} for r in self.riders],
              "alerts": [a for a in self.alerts if self.t - a["t"] < 6.0]}
         if self.points:
             ahead = [sd for sd in self.sprints if sd > self.player.s]
             d["sprint_next"] = int(ahead[0] // self.lap_m) if ahead else self.laps      # vuelta completada del próximo sprint
             d["sprint_to_m"] = round((ahead[0] if ahead else self.dist) - self.player.s, 0)
             d["sprint_x2"] = not ahead                                                    # el que queda es el de la meta (doble)
+        if self.elim:
+            nxt = self.elim_lines[self._elim_done] if self._elim_done < len(self.elim_lines) else int(self.dist)
+            d["elim_next"] = int(nxt // self.lap_m)                       # vuelta completada en la próxima eliminación
+            d["elim_to_m"] = round(max(0.0, nxt - self.player.s), 0)
+            d["left"] = sum(1 for r in self.riders if not r.out)
         if self.state == "finished":
             d["results"] = self.results
         return d

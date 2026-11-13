@@ -22,7 +22,7 @@ def _path(path=None) -> Path:
     return CONFIG_DIR / "races.json"
 
 
-PELOTON_EVENTS = ("scratch", "points")
+PELOTON_EVENTS = ("scratch", "points", "elimination")
 
 
 def _valid(r) -> bool:
@@ -105,7 +105,7 @@ def record_from_peloton(r, now: float | None = None) -> dict | None:
         return None
     ps = [x for x in r.power_series if x == x]
     rec = {"event": r.spec.event, "date": time.strftime("%Y-%m-%d %H:%M", time.localtime(now or time.time())),
-           "laps": int(r.spec.laps), "level": r.spec.level, "pos": int(me["pos"]), "n": len(r.results),
+           "laps": int(r.spec.eff_laps()), "level": r.spec.level, "pos": int(me["pos"]), "n": len(r.results),
            "time_s": round(float(me["time_s"]), 2), "avg_w": round(sum(ps) / len(ps), 1) if ps else 0.0,
            "max_w": round(max(ps), 1) if ps else 0.0}
     if r.spec.event == "points":
@@ -113,7 +113,7 @@ def record_from_peloton(r, now: float | None = None) -> dict | None:
     return rec
 
 
-_NAMES = {"persecucion": "PERSECUCION", "scratch": "SCRATCH", "points": "PUNTOS"}
+_NAMES = {"persecucion": "PERSECUCION", "scratch": "SCRATCH", "points": "PUNTOS", "elimination": "ELIMINACION"}
 def _norm(level) -> str:
     """Los registros viejos guardan easy/even/hard: se leen con el nombre de hoy."""
     from . import peloton
@@ -130,6 +130,8 @@ def _label(k: tuple) -> str:
 def _value(r) -> str:
     m, sec = divmod(r["time_s"], 60.0)
     clock = f"{int(m)}:{sec:04.1f}"
+    if r["event"] == "elimination" and r.get("pos") != 1:
+        return "ELIMINADO"
     return f"{r.get('pts', 0)} PTS" if r["event"] == "points" else clock
 
 
