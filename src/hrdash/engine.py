@@ -74,6 +74,7 @@ class Engine:
         self.race = None                        # persecucion en curso (race.PursuitRace) o None
         self.race_note = ""                     # aviso al jugador (p. ej. no hay marca previa para el fantasma)
         self.race_pb: bool | None = None        # al terminar: si fue record personal
+        self.discarded = False                  # el usuario salio sin grabar (tecla `discard`): no se exporta nada
 
     # ------------------------------------------------------------ fuentes
     @property
@@ -532,12 +533,16 @@ class Engine:
                                    race=self.race_info())
 
     def handle_key(self, name: str) -> bool:
-        """Tecla procesada por el motor en standalone. True si fue `q` (salir y grabar).
+        """Tecla procesada por el motor en standalone. True si fue `q` (salir y grabar) o `discard`
+        (salir sin grabar: queda marcado en `discarded` y la salida no exporta FIT ni CSV).
 
         `q`/`x`/`s` afectan a la sesion y por eso el hijo las reenvia. En standalone el
         motor es la dueña; con TUI la dueña sigue siendo `ui.py` (no se duplica aqui).
         """
         if name == "q":
+            return True
+        if name == "discard":
+            self.discarded = True
             return True
         if name == "space":
             self.toggle_pause()
