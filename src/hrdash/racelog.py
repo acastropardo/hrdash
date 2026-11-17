@@ -64,8 +64,9 @@ def load(path=None) -> list:
 
 
 def best(distance_m: int, path=None) -> dict | None:
-    """La mejor marca (menor tiempo) en esa distancia, o None."""
-    rs = [r for r in load(path) if r["distance_m"] == distance_m]
+    """La mejor marca (menor tiempo) de persecucion en esa distancia, o None. Solo persecuciones: los registros del
+    peloton (scratch, puntos, eliminacion) no tienen `distance_m` y antes rompian aqui con KeyError."""
+    rs = [r for r in load(path) if r["event"] == "persecucion" and r["distance_m"] == distance_m]
     return min(rs, key=lambda r: r["time_s"]) if rs else None
 
 
