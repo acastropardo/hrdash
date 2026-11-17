@@ -409,8 +409,7 @@ class Engine:
                     "total_s": 0, "lines": self.race_hint(), "profile": []}
         if s.kind == "scratch":
             sc = s.scratch
-            lo, hi = peloton.LEVEL_RANGE[sc.level]
-            ftp = int(self.config.ftp)
+            lo, hi = peloton.rival_cp_range(sc.level, float(int(self.config.ftp)))
             pts = sc.event == "points"
             elim = sc.event == "elimination"
             rule = (f"SPRINT CADA {peloton.SPRINT_EVERY} VUELTAS: 5-3-2-1 (META X2)" if pts
@@ -419,7 +418,7 @@ class Engine:
             return {**workouts.spec_to_dict(s), "summary": s.summary(),
                     "name": "Carrera por puntos" if pts else "Eliminacion" if elim else "Scratch contra el peloton",
                     "total_s": 0, "profile": [],
-                    "lines": [f"{peloton.N_RIVALS} RIVALES DE {int(ftp * lo)} A {int(ftp * hi)} W DE FTP",
+                    "lines": [f"{peloton.N_RIVALS} RIVALES DE {int(lo)} A {int(hi)} W DE FTP",
                               f"{sc.distance_m() / 1000:g} KM EN {sc.eff_laps()} VUELTAS DE 250 M",
                               rule,
                               "SALIDA PARADA, CUENTA ATRAS DE 3 S"]}
