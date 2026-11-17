@@ -11,11 +11,12 @@ Contrato (aditivo; un cambio incompatible sube `proto.PROTOCOL`):
   motor -> cliente (un JSON por mensaje)
     {"hello": {"protocol": N, "views": [...], "app": "hrdash"}}   al conectar
     snapshot (el dict de `proto.build_snapshot` mas `version`)    a 1 Hz (2 Hz en el menu)
-    {"summary": {...}}                                            al salir, tras exportar
+    {"summary": {...}}                                            al salir, tras exportar (no con `discard`)
 
   cliente -> motor
     {"hello": {"client": "godot", "views": [...]}}   el motor cuenta la ventana como abierta
-    {"key": "q|x|s|space"}, {"views": [...]}, {"zoom": ...}
+    {"key": "q|discard|x|s|space"}, {"views": [...]}, {"zoom": ...}
+                                                     (`q` sale y graba; `discard` sale sin grabar nada)
     {"ui": {"act": "<id>"}}                          acciones del menu (`Engine.handle_ui`)
 
 El servidor corre en un hilo propio con su bucle de asyncio: el motor (asyncio en el hilo

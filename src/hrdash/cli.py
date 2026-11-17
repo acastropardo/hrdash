@@ -361,6 +361,10 @@ async def cmd_3d(hr_source, tr_source, cfg: Config, views, seconds: int | None =
         await eng.stop()
         if not getattr(host, "keeps_open", False):
             host.stop()                      # el stream sigue abierto hasta mandar el resumen
+    if eng.discarded:                        # el cliente pidio salir sin grabar: ni FIT, ni CSV, ni resumen
+        host.stop()
+        print("Saliste sin grabar: la sesion se descarto.")
+        return 0
     if eng.phase == "menu":                  # salio del menu sin pulsar Play: no hay sesion
         host.stop()
         print("Saliste del menu sin iniciar: no se grabo nada.")
