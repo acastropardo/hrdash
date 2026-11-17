@@ -36,12 +36,29 @@ LAPS_LADDER = (8, 12, 16, 20)            # 2, 3, 4 y 5 km
 # Dificultad de los rivales: seis niveles, de muy suave a super fuerte. Cada uno es un rango de FTP (factor sobre el FTP del
 # jugador) 0,07 más bajo que el siguiente; el más alto es el que antes se llamaba "parejos" (0,92-1,06: con 240 W de FTP,
 # rivales de 220 a 254 W).
-LEVELS = ("vsoft", "soft", "mid", "midhard", "strong", "vstrong")
-LEVEL_NAMES = {"vsoft": "MUY SUAVE", "soft": "SUAVE", "mid": "MEDIA", "midhard": "MEDIA FUERTE", "strong": "FUERTE",
+#
+# SUPER SUAVE ("xsoft") es distinto: no depende del FTP del jugador sino de un rango ABSOLUTO de potencia (rivales de 100 a
+# 130 W de CP), pensado para rodar a 100-130 W. Su reserva anaerobica W' es el 40 % de la normal: los ataques y el esprint
+# final no se disparan (con W' completo un rival de 115 W esprintaria a ~860 W en los ultimos 20 s; asi se queda en ~265 W).
+LEVELS = ("xsoft", "vsoft", "soft", "mid", "midhard", "strong", "vstrong")
+LEVEL_NAMES = {"xsoft": "SUPER SUAVE", "vsoft": "MUY SUAVE", "soft": "SUAVE", "mid": "MEDIA", "midhard": "MEDIA FUERTE", "strong": "FUERTE",
                "vstrong": "SUPER FUERTE"}
 LEVEL_RANGE = {"vsoft": (0.57, 0.71), "soft": (0.64, 0.78), "mid": (0.71, 0.85), "midhard": (0.78, 0.92),
                "strong": (0.85, 0.99), "vstrong": (0.92, 1.06)}
+LEVEL_ABS_W = {"xsoft": (100.0, 130.0)}           # niveles con rango absoluto de CP (W), no relativo al FTP
+LEVEL_WPRIME = {"xsoft": 0.4}                     # factor sobre W_PRIME (los demas niveles, 1,0)
+# "pegada": cuanto se pasan del CP los esfuerzos (ataque, esprint, sprints intermedios, no quedar ultimo, cerrar un hueco).
+# Un esfuerzo de m x CP pasa a ser 1 + (m - 1) x pegada: con 0,4 el esprint de 2,3 x CP se queda en ~1,5 x CP.
+LEVEL_PUNCH = {"xsoft": 0.4}
 DEFAULT_LEVEL = "vstrong"
+
+
+def rival_cp_range(level: str, ftp: float) -> tuple:
+    """(min, max) del CP de los rivales en W para un nivel: absoluto en SUPER SUAVE, FTP x factor en los demas."""
+    if level in LEVEL_ABS_W:
+        return LEVEL_ABS_W[level]
+    lo, hi = LEVEL_RANGE[level]
+    return (ftp * lo, ftp * hi)
 # niveles de versiones anteriores (config.toml y races.json guardados): easy = el actual "media fuerte" (mismo rango),
 # even = "super fuerte"; hard (1,04-1,18) ya no existe y pasa al más alto
 OLD_LEVELS = {"easy": "midhard", "even": "vstrong", "hard": "vstrong"}
@@ -180,6 +197,7 @@ class Rider:
         self.w = W_PRIME
         self.role = "rouleur"
         self.lead_frac = 0.90          # fracción de CP al llevar el ritmo
+        self.punch = 1.0               # pegada del nivel (LEVEL_PUNCH): escala lo que los esfuerzos pasan del CP
         self.attack_at = 1e9           # instante del ataque
         self.attack_until = -1.0
         self.sprint_laps = 1.0         # vueltas que faltan cuando empieza a esprintar
@@ -191,16 +209,21 @@ class Rider:
 
 
 def make_field(spec: ScratchSpec, ftp: float, mass: float) -> list:
-    """Jugador (idx 0) y N_RIVALS rivales con FTP = ftp x factor del nivel, masa y papel con la semilla fija."""
+    """Jugador (idx 0) y N_RIVALS rivales con FTP = ftp x factor del nivel (o el rango absoluto de SUPER SUAVE), masa y
+    papel con la semilla fija."""
     rng = random.Random(spec.seed)
     riders = [Rider(0, "TU", "#22c55e", Physics(mass=mass, a_max=A_MAX), True)]
-    lo, hi = LEVEL_RANGE[spec.level]
+    absolute = spec.level in LEVEL_ABS_W
+    lo, hi = LEVEL_ABS_W[spec.level] if absolute else LEVEL_RANGE[spec.level]
+    wf = LEVEL_WPRIME.get(spec.level, 1.0)
     roles = list(ROLES)
     rng.shuffle(roles)
     for i in range(N_RIVALS):
         r = Rider(i + 1, NAMES[i], COLORS[i], Physics(cda=0.28 * rng.uniform(0.95, 1.05), mass=mass * rng.uniform(0.92, 1.08), a_max=A_MAX))
-        r.cp = max(60.0, ftp * rng.uniform(lo, hi))
-        r.w0 = r.w = W_PRIME * rng.uniform(0.85, 1.15)
+        # una sola tirada por valor en todos los niveles: la secuencia de la semilla no cambia (mismas carreras)
+        r.cp = rng.uniform(lo, hi) if absolute else max(60.0, ftp * rng.uniform(lo, hi))
+        r.w0 = r.w = W_PRIME * wf * rng.uniform(0.85, 1.15)
+        r.punch = LEVEL_PUNCH.get(spec.level, 1.0)
         r.role = roles[i % len(roles)]
         r.lead_frac = rng.uniform(0.86, 0.94)
         r.sprint_laps = 1.7 if r.role == "sprinter" else 1.0
@@ -278,16 +301,22 @@ class ScratchRace:
 
     def _ai_power(self, r: Rider) -> float:
         cp, left_laps = r.cp, (self.dist - r.s) / self.lap_m
+
+        def over(m: float) -> float:
+            """Un esfuerzo de `m` x CP con la pegada del nivel. Con 1,0, `m * cp` tal cual: los niveles de siempre dan
+            los mismos dobles bit a bit (1 + 0,3 x 1 no es exactamente 1,3)."""
+            return m * cp if r.punch == 1.0 else (1.0 + (m - 1.0) * r.punch) * cp
+
         # ataque a mitad de carrera: potencia alta mientras quede W'
         if r.role == "attacker" and not r.attacked and self.t >= r.attack_at and r.w > 0.8 * r.w0:
             r.attacked, r.attack_until = True, self.t + 40.0
             self._alert(f"ATAQUE {r.name}")
         if self.t < r.attack_until and r.w > 0.25 * r.w0:
-            return 1.30 * cp
+            return over(1.30)
         # esprint final con lo que quede de W': P = CP + W'/tiempo_restante (se vacia justo en la meta)
         if left_laps <= r.sprint_laps:
             t_left = max(2.0, (self.dist - r.s) / max(r.v, 6.0))
-            return min(2.3 * cp, cp + r.w / t_left) if r.w > 0.02 * r.w0 else 1.02 * cp
+            return min(over(2.3), cp + r.w / t_left) if r.w > 0.02 * r.w0 else over(1.02)
         if r.out:
             return 0.45 * cp
         if self.elim:
@@ -295,11 +324,11 @@ class ScratchRace:
             rank = alive.index(r)
             for ln in self.elim_lines[self._elim_done:self._elim_done + 1]:
                 if 0.0 < ln - r.s < 0.9 * self.lap_m and r.w > 0.12 * r.w0 and (rank >= len(alive) - 2 or r.role == "sprinter"):
-                    return min(1.9 * cp, cp + r.w / 5.0)      # no quedar el último en la línea
+                    return min(over(1.9), cp + r.w / 5.0)      # no quedar el último en la línea
         if self.points and r.role != "rouleur":
             for k, sd in enumerate(self.sprints):
                 if 0.0 < sd - r.s < 0.7 * self.lap_m and k not in r.sprinted and r.w > 0.35 * r.w0:
-                    return min(1.9 * cp, cp + r.w / 6.0) if r.role == "sprinter" else 1.35 * cp
+                    return min(over(1.9), cp + r.w / 6.0) if r.role == "sprinter" else over(1.35)
         lead = self._ahead(r)
         if lead is None:
             return r.lead_frac * cp                       # nadie delante: lleva el ritmo
@@ -308,7 +337,7 @@ class ScratchRace:
         v_t = lead.v * (1.0 + 0.04 * (gap - 2.0) / 8.0)
         a = max(-2.0, min(2.0, (v_t - r.v) * 1.5))
         p = r.phys.resist(max(r.v, 0.5), r.draft) + r.phys.mass * max(r.v, 0.5) * a
-        return max(0.0, min(1.25 * cp, p))
+        return max(0.0, min(over(1.25), p))
 
     def _update_w(self, r: Rider, dt: float) -> None:
         if r.power > r.cp:
