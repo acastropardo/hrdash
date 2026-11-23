@@ -1,7 +1,7 @@
 """Historial de carreras (`races.json` junto a `config.toml`): tiempo, parciales y la serie de potencia de cada
 persecucion, para el fantasma "mi mejor marca" y para saber si una carrera es record personal. Tambien guarda el
-resultado de cada scratch y prueba de puntos (puesto, tiempo, puntos, potencia media) y resume todo para el menu
-(`summary`): records por prueba, tendencia y ultimas carreras.
+resultado de cada scratch, prueba de puntos y eliminacion (puesto, tiempo, puntos, potencia media) y resume todo para
+el menu (`summary`): records por prueba, tendencia, ultimas carreras y la lista completa (`all`).
 
 Escritura atomica (archivo temporal + rename) y lectura tolerante: un archivo roto o con campos raros no impide
 arrancar ni correr (se ignora y se vuelve a empezar)."""
@@ -129,16 +129,51 @@ def _label(k: tuple) -> str:
 
 
 def _value(r) -> str:
-    m, sec = divmod(r["time_s"], 60.0)
-    clock = f"{int(m)}:{sec:04.1f}"
+    clock = _clock(r["time_s"])
     if r["event"] == "elimination" and r.get("pos") != 1:
         return "ELIMINADO"
     return f"{r.get('pts', 0)} PTS" if r["event"] == "points" else clock
 
 
-def summary(path=None, recent: int = 8, records: int = 8, trend: int = 8) -> dict:
+def _clock(t: float) -> str:
+    m, sec = divmod(t, 60.0)
+    return f"{int(m)}:{sec:04.1f}"
+
+
+def _watts(r) -> tuple:
+    """Potencia media y maxima de una carrera: el peloton las guarda; la persecucion las saca de su serie."""
+    if r["event"] != "persecucion":
+        return round(float(r.get("avg_w", 0.0)), 1), round(float(r.get("max_w", 0.0)), 1)
+    ps = [float(x) for x in r["power"]]
+    return (round(sum(ps) / len(ps), 1), round(max(ps), 1)) if ps else (0.0, 0.0)
+
+
+def full_list(rs: list, limit: int = MAX_RECORDS) -> list:
+    """Todas las carreras, de la mas reciente a la mas antigua, ya listas para la tabla del historial completo: prueba,
+    resultado, puesto, tiempo, potencia y si fue record personal cuando se corrio (mismo criterio que `add`)."""
+    best_score: dict = {}
+    out = []
+    for r in rs:
+        k = _key(r)
+        sc = _score(r)
+        pb = k not in best_score or sc < best_score[k]
+        if r["event"] in PELOTON_EVENTS:
+            pb = pb and r["pos"] == 1
+        best_score[k] = min(best_score.get(k, sc), sc)
+        avg, mx = _watts(r)
+        out.append({"date": r["date"], "event": r["event"], "label": _label(k), "value": _value(r),
+                    "time": _clock(r["time_s"]),
+                    "pos": "" if r["event"] == "persecucion" else f"P{r['pos']}/{r.get('n', 4)}",
+                    "won": r["event"] != "persecucion" and r.get("pos") == 1, "pb": bool(pb),
+                    "avg_w": avg, "max_w": mx})
+    out.reverse()
+    return out[:limit]
+
+
+def summary(path=None, recent: int = 8, records: int = 8, trend: int = 8, full: int = MAX_RECORDS) -> dict:
     """Lo que dibuja la pagina HISTORIAL del menu: totales, records por prueba (con la tendencia de sus ultimas marcas,
-    de la mas antigua a la mas reciente, ya como tiempo o puntos) y las ultimas carreras. Siempre un dict valido."""
+    de la mas antigua a la mas reciente, ya como tiempo o puntos), las ultimas carreras y, en `all`, todas (la tabla
+    del historial completo, de la mas reciente a la mas antigua). Siempre un dict valido."""
     rs = load(path)
     cats: dict = {}
     for r in rs:
@@ -161,4 +196,4 @@ def summary(path=None, recent: int = 8, records: int = 8, trend: int = 8) -> dic
                      "won": bool(won and r["event"] != "persecucion")})
     km = sum((r["distance_m"] if r["event"] == "persecucion" else r["laps"] * 250) for r in rs) / 1000.0
     return {"n": len(rs), "wins": sum(1 for r in rs if r["event"] != "persecucion" and r.get("pos") == 1),
-            "km": round(km, 1), "records": recs[:records], "recent": last}
+            "km": round(km, 1), "records": recs[:records], "recent": last, "all": full_list(rs, full)}
