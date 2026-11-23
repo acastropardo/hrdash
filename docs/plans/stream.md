@@ -97,6 +97,13 @@ es record si se gana (`pos == 1`) y mejora el tiempo (scratch) o los puntos (pun
 won}]}`, que el menu lleva en la clave nueva `history` de `menu` (se relee solo si cambia el archivo). `race.pb` pasa a
 valer tambien en el scratch.
 
+Historial completo: `summary()` lleva ademas `all`, **todas** las carreras guardadas (hasta `MAX_RECORDS` = 200), de la mas
+reciente a la mas antigua: `[{date, event, label, value, time, pos, won, pb, avg_w, max_w}]` (`full_list`). `time` es el
+reloj siempre (en puntos y eliminacion `value` no lo es), `avg_w`/`max_w` salen de la serie en la persecucion, y `pb` dice
+si fue record personal **cuando se corrio** (mismo criterio que `add`, recorriendo el historial en orden). El cliente pinta
+con eso la tabla TODAS LAS CARRERAS (filtro por prueba y paginas) sin pedir nada al motor; la paginacion es del cliente.
+Aditivo: los clientes que no conocen `all` lo ignoran, PROTOCOL sin cambios. 200 filas son ~40 KB por snapshot de menu.
+
 
 ## Dificultad de los rivales (seis niveles)
 
