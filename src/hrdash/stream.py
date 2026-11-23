@@ -11,7 +11,9 @@ Contrato (aditivo; un cambio incompatible sube `proto.PROTOCOL`):
   motor -> cliente (un JSON por mensaje)
     {"hello": {"protocol": N, "views": [...], "app": "hrdash"}}   al conectar
     snapshot (el dict de `proto.build_snapshot` mas `version`)    a 1 Hz (2 Hz en el menu)
-    {"summary": {...}}                                            al salir, tras exportar (no con `discard`)
+    {"summary": {...}}                                            al salir, tras exportar (no con `discard`): metricas,
+                                                                  zonas, bloques, carrera, serie para graficos y rutas
+                                                                  (`summary_dict`; lo pinta la pantalla de resumen)
 
   cliente -> motor
     {"hello": {"client": "godot", "views": [...]}}   el motor cuenta la ventana como abierta
@@ -28,6 +30,7 @@ snapshot, para que el menu aparezca sin esperar al siguiente tick.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import queue
 import threading
 import time
@@ -188,17 +191,91 @@ class StreamHost:
             self.error = f"stream summary: {type(exc).__name__}"[:90]
 
 
+SERIES_MAX = 600          # puntos del grafico del resumen: 1 h a 1 Hz son 3600 muestras, el mensaje tiene que ser chico
+
+
+def _series(samples: list) -> dict:
+    """La sesion submuestreada para el grafico del resumen: medias por tramos de `step` segundos (sin contar
+    los ceros de potencia/cadencia/velocidad, que son lecturas que faltan, no esfuerzo nulo)."""
+    n = len(samples)
+    step = max(1, -(-n // SERIES_MAX))
+    out = {"step_s": step, "hr": [], "watts": [], "cadence": [], "speed_kmh": []}
+    for i in range(0, n, step):
+        xs = samples[i:i + step]
+        out["hr"].append(round(sum(x.hr for x in xs) / len(xs)))
+        for key, attr in (("watts", "watts"), ("cadence", "cadence"), ("speed_kmh", "speed_kmh")):
+            vals = [getattr(x, attr) for x in xs if getattr(x, attr)]
+            out[key].append(round(sum(vals) / len(vals), 1) if vals else 0)
+    for key in ("watts", "cadence", "speed_kmh"):
+        if not any(out[key]):
+            out[key] = []                     # sin rodillo: no se manda una serie de ceros
+    return out
+
+
+def _race(eng) -> dict | None:
+    """Resultado de la carrera (persecucion / scratch / puntos / eliminacion) si se termino; None sin carrera."""
+    from . import racelog
+    r = getattr(eng, "race", None)
+    if r is None:
+        return None
+    if getattr(r, "state", "") != "finished":
+        return {"event": getattr(getattr(r, "spec", None), "event", "persecucion"), "finished": False}
+    try:
+        rec = racelog.record_from_race(r) if getattr(r, "final_s", None) is not None else racelog.record_from_peloton(r)
+    except Exception:  # noqa: BLE001 - el resumen sale igual sin la carrera
+        rec = None
+    if rec is None:
+        return {"event": getattr(getattr(r, "spec", None), "event", "?"), "finished": True}
+    rec = {k: v for k, v in rec.items() if k not in ("power", "splits")}
+    if getattr(r, "splits", None):
+        rec["splits"] = [round(float(x), 2) for x in r.splits]
+    rec["finished"] = True
+    rec["pb"] = bool(getattr(eng, "race_pb", False))
+    return rec
+
+
 def summary_dict(eng, res: dict) -> dict:
-    """Resumen de sesion como mensaje (no hay consola que lo imprima en el cliente)."""
+    """Resumen de sesion como mensaje (no hay consola que lo imprima en el cliente): lo pinta la pantalla de
+    resumen de Godot. Solo claves nuevas sobre las de siempre (el cliente tolera las que no conoce)."""
+    from .export import fit_sport
     sess = eng.session
+    cfg = eng.config
+    hrmax = int(cfg.computed_hrmax())
+    zones = [{"key": z.key, "name": z.name, "lo": int(round(z.low_pct * hrmax / 100.0)),
+              "hi": None if z.high_pct >= 999 else int(round(z.high_pct * hrmax / 100.0)), "color": z.color,
+              "s": int(sess.zone_seconds[z.idx])} for z in cfg.zones()]
+    blocks = [{"label": b["label"], "n": int(b["n"]), "avg_hr": round(b["avg_hr"]), "max_hr": int(b["max_hr"]),
+               "avg_w": round(b["avg_w"]), "max_w": int(b["max_w"]), "avg_cad": round(b["avg_cad"]),
+               "avg_kmh": round(b["avg_kmh"], 1), "dist_m": int(b["dist_m"]), "kcal": round(b["kcal"], 1),
+               "zones": [int(x) for x in b["zones"]]} for b in sess.blocks()]
+    v = res.get("validate") or {}
+    fit = res.get("fit")
+    sport = fit_sport(sess)
+    plan = None
+    try:
+        if getattr(eng, "workout", None) is not None:
+            plan = eng.spec.summary()
+    except Exception:  # noqa: BLE001
+        plan = None
     return {
         "n": int(sess.n), "elapsed_s": int(sess.elapsed_s),
         "avg_hr": float(sess.avg_hr), "max_hr": int(sess.max_hr),
         "avg_watts": float(sess.avg_watts), "max_watts": int(sess.max_watts),
         "total_kcal": float(sess.total_kcal), "dist_km": float(sess.dist_km),
         "wkg": float(sess.wkg),
-        "fit": str(res.get("fit")) if res.get("fit") else None,
+        "fit": str(fit) if fit else None,
         "csv": str(res.get("csv")) if res.get("csv") else None,
         "fit_error": res.get("fit_error"),
-        "validate_ok": bool((res.get("validate") or {}).get("ok")) if res.get("validate") else None,
+        "validate_ok": bool(v.get("ok")) if v else None,
+        # desde el plan 12 (pantalla de resumen)
+        "started_at": int(sess.start_ts), "paused_s": int(sess.paused_s),
+        "min_hr": int(sess.min_hr), "hrmax": hrmax, "ftp": int(getattr(cfg, "ftp", 0) or 0),
+        "avg_cadence": round(float(sess.avg_cadence), 1), "max_cadence": round(float(sess.max_cadence), 1),
+        "avg_speed": round(float(sess.avg_speed), 1), "max_speed": round(float(sess.max_speed), 1),
+        "dist_estimada": bool(getattr(getattr(eng, "laps", None), "estimada", False)),
+        "zones": zones, "blocks": blocks, "plan": plan, "race": _race(eng),
+        "series": _series(sess.samples),
+        "sport": list(sport), "export_dir": str(Path(fit).parent) if fit else (
+            str(Path(res["csv"]).parent) if res.get("csv") else str(cfg.effective_export_dir())),
+        "fit_bytes": int(v.get("bytes") or 0) if v else 0,
     }

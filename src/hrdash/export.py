@@ -13,6 +13,23 @@ MESG_SESSION = 18
 MESG_LAP = 19
 MESG_RECORD = 20
 MESG_ACTIVITY = 34
+MESG_SPORT = 12
+MESG_DEVICE_INFO = 23
+
+# Deporte del FIT (lo que Strava usa para clasificar la actividad). Con rodillo es ciclismo en rodillo
+# (Strava: "Pedaleo" con rodillo, suma a los totales de ciclismo); solo con pulsometro, entrenamiento
+# generico. Decision del dueno, 2026-11-22 (plan 12 de hrdash-godot).
+SPORT_TRAINER = ('cycling', 'indoor_cycling')
+SPORT_HR_ONLY = ('training', 'generic')
+
+
+def fit_sport(session: Session) -> tuple:
+    """(sport, sub_sport) del FIT de esta sesion."""
+    return SPORT_TRAINER if _has_trainer(session) else SPORT_HR_ONLY
+
+
+def _has_trainer(session: Session) -> bool:
+    return session._t["watts"][3] > 0 or session._t["speed_kmh"][3] > 0
 
 
 def _stamp(session: Session) -> str:
@@ -52,14 +69,29 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
     enc.write_mesg({
         'mesg_num': MESG_FILE_ID,
         'type': 'activity',
-        'manufacturer': 'garmin',
+        'manufacturer': 'development',
         'product': 0,
         'time_created': utc_start,
         'product_name': "HRDash",
     })
+    enc.write_mesg({
+        'mesg_num': MESG_DEVICE_INFO,
+        'timestamp': utc_start,
+        'device_index': 'creator',
+        'manufacturer': 'development',
+        'product': 0,
+        'product_name': "HRDash",
+    })
+    sport, sub_sport = fit_sport(session)
+    enc.write_mesg({
+        'mesg_num': MESG_SPORT,
+        'sport': sport,
+        'sub_sport': sub_sport,
+        'name': "HRDash rodillo" if sport == 'cycling' else "HRDash",
+    })
 
     last_ts = -1
-    tr_data = (session._t["watts"][3] > 0 or session._t["speed_kmh"][3] > 0)
+    tr_data = _has_trainer(session)
     for s in session.samples:
         if s.epoch <= last_ts:             # FIT exige timestamps estrictamente crecientes
             continue
@@ -98,7 +130,8 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
                 'mesg_num': MESG_LAP,
                 'message_index': i,
                 'timestamp': datetime.fromtimestamp(t1, tz=timezone.utc),
-                'sport': 'training',
+                'sport': sport,
+                'sub_sport': sub_sport,
                 'event': 'lap',
                 'event_type': 0,
                 'start_time': datetime.fromtimestamp(t0, tz=timezone.utc),
@@ -116,7 +149,8 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
             'mesg_num': MESG_LAP,
             'message_index': 0,
             'timestamp': utc_end,
-            'sport': 'training',
+            'sport': sport,
+            'sub_sport': sub_sport,
             'event': 'lap',
             'event_type': 0,
             'start_time': utc_start,
@@ -134,7 +168,8 @@ def export_fit(session: Session, config: Config, path: Path, sensor_name: str = 
         'mesg_num': MESG_SESSION,
         'message_index': 0,
         'timestamp': utc_end,
-        'sport': 'training',
+        'sport': sport,
+        'sub_sport': sub_sport,
         'start_time': utc_start,
         'total_elapsed_time': float(dur),
         'total_timer_time': float(max(1, dur - int(session.paused_s))),    # sin pausas
@@ -207,6 +242,8 @@ def validate_fit(path: Path, session: Session) -> dict:
     recs = messages.get('record_mesgs', [])
     hrs = [r.get('heart_rate') for r in recs if isinstance(r.get('heart_rate'), (int, float))]
     pows = [r.get('power') for r in recs if isinstance(r.get('power'), (int, float))]
+    sess = (messages.get('session_mesgs') or [{}])[0]
+    sport_names = fit_sport(session)
     summary = {
         'records': len(recs),
         'samples': session.n,
@@ -219,15 +256,28 @@ def validate_fit(path: Path, session: Session) -> dict:
         'laps': len(messages.get('lap_mesgs', [])),
         'expected_laps': max(1, len(session.blocks())),
         'errors': len(errors),
+        'sport': sess.get('sport'),
+        'sub_sport': sess.get('sub_sport'),
+        'expected_sport': list(sport_names),
         'bytes': path.stat().st_size,
     }
     ok = (summary['records'] == summary['samples']
           and summary['laps'] == summary['expected_laps']
           and summary['fit_max_hr'] == summary['app_max_hr']
+          and _sport_ok(summary['sport'], summary['sub_sport'], sport_names)
           and (summary['fit_max_watts'] is None
                or summary['fit_max_watts'] == summary['app_max_watts']))
     summary['ok'] = ok
     return summary
+
+
+def _sport_ok(sport, sub_sport, want: tuple) -> bool:
+    """El deporte decodificado (numero, sin `convert_types_to_strings`) coincide con el pedido."""
+    from garmin_fit_sdk import Profile
+    types = Profile['types']
+    def code(tname, name):
+        return next((int(k) for k, v in types[tname].items() if v == name), None)
+    return sport == code('sport', want[0]) and sub_sport == code('sub_sport', want[1])
 
 
 def export_session(session: Session, config: Config, sensor_name: str,
